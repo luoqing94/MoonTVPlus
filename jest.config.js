@@ -16,6 +16,15 @@ const customJestConfig = {
 
   testEnvironment: 'jest-environment-jsdom',
 
+  // Jest 27's vm sandbox does not inherit Node's fetch globals. Next.js middleware
+  // constructs NextRequest, which extends the global Request.
+  globals: {
+    Request,
+    Response,
+    Headers,
+    fetch,
+  },
+
   /**
    * Absolute imports and Module Path Aliases
    */
