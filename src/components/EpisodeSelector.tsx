@@ -678,7 +678,17 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     setAttemptedSources((prev) => new Set(prev).add(sourceKey));
 
     try {
-      const info = await getVideoResolutionFromM3u8(episodeUrl, speedTestTimeout);
+      // 与播放页 PreferBestSource / getVideoInfo 一致：proxyMode 开启时走代理测速
+      let testUrl = episodeUrl;
+      if (!episodeUrl.includes('/api/proxy/')) {
+        const isM3u8 =
+          episodeUrl.toLowerCase().includes('.m3u') ||
+          !episodeUrl.toLowerCase().match(/\.(mp4|flv|webm|mkv|avi|mov)(\?.*)?$/);
+        if (source.proxyMode && isM3u8) {
+          testUrl = `/api/proxy/vod/m3u8?url=${encodeURIComponent(episodeUrl)}&source=${encodeURIComponent(source.source)}`;
+        }
+      }
+      const info = await getVideoResolutionFromM3u8(testUrl, speedTestTimeout);
       setVideoInfoMap((prev) => new Map(prev).set(sourceKey, info));
     } catch (error) {
       // 失败时保存错误状态，并区分超时与无法访问
