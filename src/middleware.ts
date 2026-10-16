@@ -4,19 +4,21 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { isAccessTokenInvalidated } from '@/lib/access-token-invalidation';
 import { getAuthInfoFromCookie } from '@/lib/auth';
+import { isMatcherExcludedPath } from '@/lib/middleware-public-paths';
 import { TOKEN_CONFIG } from '@/lib/refresh-token';
 import { isTVModeEnabled, resolveLoginPath } from '@/lib/tv-mode';
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  if (!isTVModeEnabled() && isTVModePath(pathname)) {
-    return new NextResponse('Not Found', { status: 404 });
-  }
-
-  // 跳过不需要认证的路径
+  // 必须先于 TV 模式 404 和认证失败处理。EdgeOne 会忽略 config.matcher，
+  // 未登录访问 /login、/tv/login 时如果先走认证，会 307 到自己并无限嵌套。
   if (shouldSkipAuth(pathname)) {
     return NextResponse.next();
+  }
+
+  if (!isTVModeEnabled() && isTVModePath(pathname)) {
+    return new NextResponse('Not Found', { status: 404 });
   }
 
   const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
@@ -158,7 +160,13 @@ function handleAuthFailure(
   }
 
   // TV 端页面未授权时进入电视扫码登录页
-  const loginUrl = new URL(resolveLoginPath(pathname), request.url);
+  const loginPath = resolveLoginPath(pathname);
+  // matcher 被忽略时，登录页自己也会进到这里。再重定向会变成 /login?redirect=%2Flogin。
+  if (pathname === loginPath || pathname.startsWith(`${loginPath}/`)) {
+    return NextResponse.next();
+  }
+
+  const loginUrl = new URL(loginPath, request.url);
   // 保留完整的URL，包括查询参数
   const fullUrl = `${pathname}${request.nextUrl.search}`;
   loginUrl.searchParams.set('redirect', fullUrl);
@@ -177,14 +185,22 @@ function shouldSkipAuth(pathname: string): boolean {
     '/screenshot.png',
   ];
 
-  return skipPaths.some((path) => pathname.startsWith(path));
+  if (skipPaths.some((path) => pathname.startsWith(path))) {
+    return true;
+  }
+
+  // config.matcher 的排除项。Vercel 靠 matcher 不进入 middleware；
+  // EdgeOne 仍会进入，所以这里再挡一次。
+  return isMatcherExcludedPath(pathname);
 }
 
 function isTVModePath(pathname: string): boolean {
   return pathname === '/tv' || pathname.startsWith('/tv/') || pathname.startsWith('/api/tv-remote/');
 }
 
-// 配置middleware匹配规则
+// 配置 middleware 匹配规则。
+// 排除项必须与 src/lib/middleware-public-paths.ts 的 MIDDLEWARE_MATCHER_EXCLUSIONS 一致。
+// Next.js 只静态分析字符串字面量，不能从那个数组生成 matcher。
 export const config = {
   matcher: [
     '/((?!_next/static|_next/image|favicon.ico|login|register|oidc-register|qr-login|warning|tv/login|api/login|api/register|api/logout|api/auth/oidc|api/auth/qr|api/auth/refresh|api/telegram/login|api/telegram/config|api/telegram/webhook|api/cron/|api/server-config|api/proxy-m3u8|api/cms-proxy|api/tvbox/subscribe|api/theme/css|api/openlist/cms-proxy|api/openlist/play|api/openlist/proxy|api/emby/cms-proxy|api/emby/play|api/emby/subtitle|api/emby/sources|tvbox/).*)',
