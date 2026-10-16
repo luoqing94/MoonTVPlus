@@ -11179,6 +11179,95 @@ function PlayPageClient() {
                   <div className='bg-white/50 dark:bg-gray-800/50 backdrop-blur-sm rounded-lg p-2 border border-gray-200/50 dark:border-gray-700/50 w-full lg:w-auto overflow-x-auto'>
                     <div className='flex gap-1.5 flex-nowrap lg:flex-wrap items-center'>
                       <div className='flex gap-1.5 flex-nowrap lg:flex-wrap lg:justify-end lg:flex-1'>
+                        {/* 直连/代理切换（会话级覆盖，不写入源配置） */}
+                        {(() => {
+                          const rawEpisodeUrl =
+                            detail?.episodes &&
+                            currentEpisodeIndex >= 0 &&
+                            currentEpisodeIndex < detail.episodes.length
+                              ? detail.episodes[currentEpisodeIndex]
+                              : '';
+                          const skipProxyToggle =
+                            !rawEpisodeUrl ||
+                            isNetdiskMountSource(currentSource) ||
+                            currentSource === 'emby' ||
+                            currentSource.startsWith('emby_') ||
+                            currentSource === 'directplay' ||
+                            rawEpisodeUrl.startsWith('/api/');
+                          if (skipProxyToggle) return null;
+                          return (
+                            <button
+                              onClick={(e) => {
+                                e.preventDefault();
+                                const nextProxyMode = !sourceProxyMode;
+                                const currentPlayTime =
+                                  artPlayerRef.current?.currentTime || 0;
+                                resumeTimeRef.current =
+                                  currentPlayTime > 0 ? currentPlayTime : null;
+                                setSourceProxyMode(nextProxyMode);
+                                setVideoError(null);
+                                setCorsFailedUrl(null);
+                                setIsVideoLoading(true);
+                                setVideoLoadingStage('sourceChanging');
+
+                                let newUrl = rawEpisodeUrl;
+                                const isM3u8 =
+                                  newUrl.toLowerCase().includes('.m3u') ||
+                                  !newUrl
+                                    .toLowerCase()
+                                    .match(
+                                      /\.(mp4|flv|webm|mkv|avi|mov)(\?.*)?$/
+                                    );
+                                if (
+                                  nextProxyMode &&
+                                  newUrl &&
+                                  isM3u8 &&
+                                  !newUrl.includes('/api/proxy/')
+                                ) {
+                                  newUrl = `/api/proxy/vod/m3u8?url=${encodeURIComponent(newUrl)}&source=${encodeURIComponent(currentSource)}`;
+                                }
+                                setVideoUrl(newUrl);
+                              }}
+                              className={`group relative flex items-center justify-center gap-1 w-8 h-8 lg:w-auto lg:h-auto lg:px-2 lg:py-1.5 text-xs font-medium rounded-md transition-all duration-200 shadow-sm hover:shadow-md cursor-pointer overflow-hidden flex-shrink-0 ${
+                                sourceProxyMode
+                                  ? 'bg-gradient-to-r from-orange-500 to-amber-600 hover:from-orange-600 hover:to-amber-700 text-white border border-orange-400'
+                                  : 'bg-gradient-to-r from-slate-500 to-gray-600 hover:from-slate-600 hover:to-gray-700 text-white border border-slate-400'
+                              }`}
+                              title={
+                                sourceProxyMode
+                                  ? '当前代理播放，点击切换为直连'
+                                  : '当前直连播放，点击切换为代理'
+                              }
+                            >
+                              <svg
+                                className='w-4 h-4 flex-shrink-0 text-white'
+                                fill='none'
+                                stroke='currentColor'
+                                viewBox='0 0 24 24'
+                              >
+                                {sourceProxyMode ? (
+                                  <path
+                                    strokeLinecap='round'
+                                    strokeLinejoin='round'
+                                    strokeWidth='2'
+                                    d='M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0'
+                                  />
+                                ) : (
+                                  <path
+                                    strokeLinecap='round'
+                                    strokeLinejoin='round'
+                                    strokeWidth='2'
+                                    d='M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1'
+                                  />
+                                )}
+                              </svg>
+                              <span className='hidden lg:inline max-w-0 group-hover:max-w-[100px] overflow-hidden whitespace-nowrap transition-all duration-200 ease-in-out text-white'>
+                                {sourceProxyMode ? '代理' : '直连'}
+                              </span>
+                            </button>
+                          );
+                        })()}
+
                         {/* 下载按钮 */}
                         <button
                           onClick={(e) => {
