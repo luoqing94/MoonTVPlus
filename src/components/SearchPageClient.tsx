@@ -35,6 +35,7 @@ import {
   getSearchHistory,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+import { splitQuery, titleContainsAllTokens } from '@/lib/search-query';
 import {
   consumeSearchScroll,
   getPageScrollTop,
@@ -442,15 +443,14 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     return item.episodes.length === 1 ? 'movie' : 'tv';
   };
 
-  // 辅助函数：检查标题是否包含搜索词（用于精确搜索）
+  // 辅助函数：检查标题是否包含全部搜索词（精确搜索，大小写不敏感）
   const titleContainsQuery = (title: string, query: string): boolean => {
     if (!exactSearch) return true; // 如果未开启精确搜索，不过滤
     if (!query || !title) return true; // 如果没有搜索词或标题，不过滤
 
-    const normalizedTitle = title.toLowerCase();
-    const normalizedQuery = query.toLowerCase();
-
-    return normalizedTitle.includes(normalizedQuery);
+    const { head, rest } = splitQuery(query);
+    const tokens = [head, ...rest].filter((token) => token.trim());
+    return titleContainsAllTokens(title, tokens);
   };
 
   const allExactSearchResults = useMemo(() => {

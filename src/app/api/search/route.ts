@@ -7,6 +7,7 @@ import { getAvailableApiSites, getCacheTime, getConfig } from '@/lib/config';
 import { searchFromApi } from '@/lib/downstream';
 import { getProxyToken } from '@/lib/emby-token';
 import { hasFeaturePermission } from '@/lib/permissions';
+import { filterMoviesByRestTokens, splitQuery } from '@/lib/search-query';
 import {
   executeSavedSourceScript,
   listEnabledSourceScripts,
@@ -42,6 +43,8 @@ export async function GET(request: NextRequest) {
       }
     );
   }
+
+  const { head, rest } = splitQuery(query);
 
   const config = await getConfig();
   const apiSites = privateOnly
@@ -188,7 +191,7 @@ export async function GET(request: NextRequest) {
   // 添加超时控制和错误处理，避免慢接口拖累整体响应
   const searchPromises = apiSites.map((site) =>
     Promise.race([
-      searchFromApi(site, query),
+      searchFromApi(site, head),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error(`${site.name} timeout`)), 20000)
       ),
@@ -264,7 +267,10 @@ export async function GET(request: NextRequest) {
 
     // 合并所有 Emby 结果，添加安全检查
     const embyResults = embyResultsArray.filter(Array.isArray).flat();
-    const apiResultsFlat = apiResults.filter(Array.isArray).flat();
+    const apiResultsFlat = filterMoviesByRestTokens(
+      apiResults.filter(Array.isArray).flat(),
+      rest
+    );
     const scriptResultsFlat = scriptResults.filter(Array.isArray).flat();
 
     let flattenedResults = [...openlistResults, ...embyResults, ...apiResultsFlat, ...scriptResultsFlat];

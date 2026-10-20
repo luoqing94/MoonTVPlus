@@ -6,6 +6,7 @@ import { getAuthInfoFromCookie } from '@/lib/auth';
 import { getAvailableApiSites, getConfig } from '@/lib/config';
 import { searchFromApi } from '@/lib/downstream';
 import { hasFeaturePermission } from '@/lib/permissions';
+import { filterMoviesByRestTokens, splitQuery } from '@/lib/search-query';
 import { yellowWords } from '@/lib/yellow';
 import { getProxyToken } from '@/lib/emby-token';
 import {
@@ -39,6 +40,8 @@ export async function GET(request: NextRequest) {
       }
     );
   }
+
+  const { head, rest } = splitQuery(query);
 
   const config = await getConfig();
   const apiSites = privateOnly
@@ -370,7 +373,7 @@ export async function GET(request: NextRequest) {
         try {
           // 添加超时控制
           const searchPromise = Promise.race([
-            searchFromApi(site, query),
+            searchFromApi(site, head),
             new Promise((_, reject) =>
               setTimeout(() => reject(new Error(`${site.name} timeout`)), 20000)
             ),
@@ -379,7 +382,10 @@ export async function GET(request: NextRequest) {
           const results = await searchPromise as any[];
 
           // 添加安全检查，确保结果是数组
-          const safeResults = Array.isArray(results) ? results : [];
+          const safeResults = filterMoviesByRestTokens(
+            Array.isArray(results) ? results : [],
+            rest
+          );
 
           // 过滤黄色内容
           let filteredResults = safeResults;
