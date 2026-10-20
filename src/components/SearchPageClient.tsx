@@ -146,12 +146,21 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
   const [forceRefresh, setForceRefresh] = useState(false);
   // 是否使用了缓存结果
   const [isFromCache, setIsFromCache] = useState(false);
-  // 精确搜索开关
-  const [exactSearch, setExactSearch] = useState(true);
+  // 前端标题过滤（精确搜索）：默认开启，与用户菜单「精确搜索」共用 localStorage
+  const [exactSearch, setExactSearch] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('exactSearch');
+      if (saved !== null) {
+        return saved === 'true';
+      }
+    }
+    return true;
+  });
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [privateLibraryOnly, setPrivateLibraryOnly] = useState(false);
   const [privateLibraryOnlyReady, setPrivateLibraryOnlyReady] = useState(false);
   const privateLibraryOnlyLoadedRef = useRef(false);
+  const exactSearchLoadedRef = useRef(false);
   const advancedButtonRefs = useRef<HTMLButtonElement[]>([]);
   const advancedDropdownRefs = useRef<HTMLDivElement[]>([]);
   const pendingScrollTopRef = useRef<number | null>(null);
@@ -863,6 +872,12 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
   }, [privateLibraryOnly]);
 
   useEffect(() => {
+    if (typeof window !== 'undefined' && exactSearchLoadedRef.current) {
+      localStorage.setItem('exactSearch', String(exactSearch));
+    }
+  }, [exactSearch]);
+
+  useEffect(() => {
     if (!advancedOpen) return;
 
     const handleClickOutside = (event: MouseEvent) => {
@@ -1141,6 +1156,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
       if (savedExactSearch !== null) {
         setExactSearch(savedExactSearch === 'true');
       }
+      exactSearchLoadedRef.current = true;
 
       const savedPrivateLibraryOnly = localStorage.getItem(
         'searchPrivateLibraryOnly'
@@ -2029,6 +2045,21 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                         <div className='absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform peer-checked:translate-x-4'></div>
                       </div>
                     </label>
+                    <label className='flex cursor-pointer select-none items-center justify-between gap-3 rounded-lg px-1 py-2'>
+                      <span className='text-sm text-gray-700 dark:text-gray-300'>
+                        前端过滤
+                      </span>
+                      <div className='relative'>
+                        <input
+                          type='checkbox'
+                          className='peer sr-only'
+                          checked={exactSearch}
+                          onChange={() => setExactSearch(!exactSearch)}
+                        />
+                        <div className='h-5 w-9 rounded-full bg-gray-300 transition-colors peer-checked:bg-green-500 dark:bg-gray-600'></div>
+                        <div className='absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform peer-checked:translate-x-4'></div>
+                      </div>
+                    </label>
                     {privateLibrarySearchEnabled && !isSpecialEntry && (
                       <label className='flex cursor-pointer select-none items-center justify-between gap-3 rounded-lg px-1 py-2'>
                         <span className='text-sm text-gray-700 dark:text-gray-300'>
@@ -2263,6 +2294,21 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                                 onChange={() =>
                                   setViewMode(viewMode === 'agg' ? 'all' : 'agg')
                                 }
+                              />
+                              <div className='h-5 w-9 rounded-full bg-gray-300 transition-colors peer-checked:bg-green-500 dark:bg-gray-600'></div>
+                              <div className='absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform peer-checked:translate-x-4'></div>
+                            </div>
+                          </label>
+                          <label className='flex cursor-pointer select-none items-center justify-between gap-3 rounded-lg px-1 py-2'>
+                            <span className='text-sm text-gray-700 dark:text-gray-300'>
+                              前端过滤
+                            </span>
+                            <div className='relative'>
+                              <input
+                                type='checkbox'
+                                className='peer sr-only'
+                                checked={exactSearch}
+                                onChange={() => setExactSearch(!exactSearch)}
                               />
                               <div className='h-5 w-9 rounded-full bg-gray-300 transition-colors peer-checked:bg-green-500 dark:bg-gray-600'></div>
                               <div className='absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform peer-checked:translate-x-4'></div>
