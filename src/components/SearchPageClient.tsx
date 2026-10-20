@@ -18,6 +18,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import React, {
   startTransition,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -26,6 +27,7 @@ import { createPortal } from 'react-dom';
 
 import { isAnimeCategoryText } from '@/lib/anime-keyword-expr';
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
+import { loadTraditionalToSimplifiedConverter } from '@/lib/danmaku/traditional-to-simplified';
 import {
   addSearchHistory,
   clearSearchHistory,
@@ -33,12 +35,18 @@ import {
   getSearchHistory,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
-import { SearchResult } from '@/lib/types';
+import {
+  consumeSearchScroll,
+  getPageScrollTop,
+  saveSearchScroll,
+  scrollPageTo,
+} from '@/lib/search-scroll-restore';
 import {
   appendSpecialSourceParam,
   isSpecialSourceContext,
   SPECIAL_SOURCE_PATH,
 } from '@/lib/special-source.client';
+import { SearchResult } from '@/lib/types';
 import { processImageUrl } from '@/lib/utils';
 
 import AcgSearch from '@/components/AcgSearch';
@@ -54,7 +62,6 @@ import SearchResultFilter, {
 import SearchSuggestions from '@/components/SearchSuggestions';
 import VideoCard, { VideoCardHandle } from '@/components/VideoCard';
 import VirtualScrollableGrid from '@/components/VirtualScrollableGrid';
-import { loadTraditionalToSimplifiedConverter } from '@/lib/danmaku/traditional-to-simplified';
 
 const PANSOU_CLOUD_TYPE_OPTIONS = Object.entries(CLOUD_TYPE_NAMES).map(
   ([value, label]) => ({ value, label })
@@ -146,6 +153,8 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
   const privateLibraryOnlyLoadedRef = useRef(false);
   const advancedButtonRefs = useRef<HTMLButtonElement[]>([]);
   const advancedDropdownRefs = useRef<HTMLDivElement[]>([]);
+  const pendingScrollTopRef = useRef<number | null>(null);
+  const pendingScrollQueryRef = useRef('');
 
   // 生成缓存键
   const getCacheKey = (query: string) => {
@@ -204,6 +213,18 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     if (snapshot.length > 20) {
       setCachedResults(query, snapshot, 'partial');
     }
+  };
+
+  const getScrollKeyOptions = () => ({
+    special: isSpecialSourceContext(),
+    privateLibraryOnly,
+  });
+
+  const saveSearchPositionForPlayback = () => {
+    savePartialCacheForPlayback();
+    const query = currentQueryRef.current.trim();
+    if (!query) return;
+    saveSearchScroll(query, getPageScrollTop(), getScrollKeyOptions());
   };
 
   // 清除指定查询的缓存
@@ -954,7 +975,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
         key={item.key}
         type='button'
         onClick={() => {
-          savePartialCacheForPlayback();
+          saveSearchPositionForPlayback();
           router.push(itemUrl);
         }}
         className='group w-full rounded-2xl border border-gray-200/80 bg-white/90 p-3 text-left shadow-sm transition-all hover:border-green-300 hover:shadow-md dark:border-gray-700 dark:bg-gray-900/70 dark:hover:border-green-700'
@@ -1512,6 +1533,38 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     privateLibraryOnlyReady,
     privateLibraryOnly,
   ]);
+
+  // Pick up the query-keyed scroll saved before navigating to /play.
+  useLayoutEffect(() => {
+    if (!privateLibraryOnlyReady) return;
+    if (!submittedSearchQuery) {
+      pendingScrollTopRef.current = null;
+      pendingScrollQueryRef.current = '';
+      return;
+    }
+    if (pendingScrollQueryRef.current !== submittedSearchQuery) {
+      pendingScrollTopRef.current = null;
+      pendingScrollQueryRef.current = submittedSearchQuery;
+    }
+    const stored = consumeSearchScroll(
+      submittedSearchQuery,
+      getScrollKeyOptions()
+    );
+    if (stored != null) {
+      pendingScrollTopRef.current = stored;
+    }
+  }, [submittedSearchQuery, privateLibraryOnlyReady, privateLibraryOnly]);
+
+  // Restore after cached/reloaded results are in the tree, before paint.
+  useLayoutEffect(() => {
+    const target = pendingScrollTopRef.current;
+    if (target == null || !showResults || searchResults.length === 0) return;
+
+    pendingScrollTopRef.current = null;
+    scrollPageTo(target);
+    const rafId = requestAnimationFrame(() => scrollPageTo(target));
+    return () => cancelAnimationFrame(rafId);
+  }, [searchResults, showResults, submittedSearchQuery]);
 
   useEffect(() => {
     if (!featureFlagsReady) return;
@@ -2352,7 +2405,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                                     ref={getGroupRef(mapKey)}
                                     from='search'
                                     onBeforeNavigate={
-                                      savePartialCacheForPlayback
+                                      saveSearchPositionForPlayback
                                     }
                                     isAggregate={true}
                                     title={title}
@@ -2416,7 +2469,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                                   <VideoCard
                                     id={item.id}
                                     onBeforeNavigate={
-                                      savePartialCacheForPlayback
+                                      saveSearchPositionForPlayback
                                     }
                                     title={item.title}
                                     poster={item.poster}
