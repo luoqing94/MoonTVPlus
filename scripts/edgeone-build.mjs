@@ -1210,8 +1210,8 @@ if (process.argv.includes('deploy') && process.env.GITHUB_ACTIONS === 'true' && 
 `;
 
   const updated = raw.startsWith('#!')
-    ? raw.replace(/^#!.*\n/, (m) => m + '(function(){' + interceptor + '})();\n')
-    : '(function(){' + interceptor + '})();\n' + raw;
+    ? raw.replace(/^#!.*\n/, (m) => m + interceptor + '\n')
+    : interceptor + '\n' + raw;
   fs.writeFileSync(cliPath, updated, 'utf8');
   return true;
 }
