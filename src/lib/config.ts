@@ -1328,8 +1328,10 @@ export async function getAvailableApiSites(
   return allApiSites;
 }
 
-function clearPublicRouteCaches() {
+export function clearPublicRouteCaches() {
   const g = globalThis as any;
+  if (g.__moontvPublicRouteCache instanceof Map) g.__moontvPublicRouteCache.clear();
+  if (g.__moontvPublicRouteInflight instanceof Map) g.__moontvPublicRouteInflight.clear();
   if (g.__moontvSsrPublicCache instanceof Map) g.__moontvSsrPublicCache.clear();
   if (g.__moontvSsrPublicInflight instanceof Map) g.__moontvSsrPublicInflight.clear();
   if (g.__moontvEdgePublicCache instanceof Map) g.__moontvEdgePublicCache.clear();

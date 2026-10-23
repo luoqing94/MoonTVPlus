@@ -105,6 +105,7 @@ export async function POST(request: NextRequest) {
 
     // 更新缓存
     await setCachedConfig(checkedConfig);
+    (globalThis as any).__moontvPublicRouteCache?.clear?.();
 
     return NextResponse.json({ success: true, message: '配置已保存' });
   } catch (error) {

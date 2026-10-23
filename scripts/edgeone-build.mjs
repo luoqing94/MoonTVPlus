@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import fs from 'node:fs';
+import path, { join } from 'node:path';
 
 function loadLocalEnvFile() {
   for (const fileName of ['.env.production', '.env']) {
@@ -1185,6 +1186,11 @@ if (process.argv.includes('deploy') && process.env.GITHUB_ACTIONS === 'true' && 
               console.log('Deployment complete!');
               console.log('ProjectId: ' + projectId);
               console.log('PreviewUrl: ' + deployUrl);
+              console.log('EDGEONE_DEPLOY_URL=' + deployUrl);
+              console.log('EDGEONE_PROJECT_ID=' + projectId);
+              if (process.env.GITHUB_OUTPUT) {
+                fs.appendFileSync(process.env.GITHUB_OUTPUT, 'deploy_url=' + deployUrl + '\nproject_id=' + projectId + '\n');
+              }
               process.exit(0);
             }
             if (d.Status === 'Failed' || d.Status === 'Canceled') {
@@ -1215,6 +1221,7 @@ function patchEdgeOneCli() {
   try {
     const cliPath = join(process.cwd(), 'node_modules', 'edgeone', 'edgeone-dist', 'cli.js');
     if (!existsSync(cliPath)) return;
+    patchEdgeOneCliForGithubDeploy(cliPath);
     let cliCode = readFileSync(cliPath, 'utf8');
     let changed = false;
     const cliTarget = 'vs(`Console URL: ${S}`)';
@@ -1286,6 +1293,7 @@ if (process.argv.includes('--post-opennext-patch')) {
   child.on('exit', (code, signal) => {
     if (!signal && code === 0) {
       if (isInsideEdgeOneBuilder) {
+        try { injectEdgeMiddlewareFetchCache(); } catch {}
         try {
           const watcher = spawn(process.execPath, [process.argv[1], '--post-opennext-patch'], {
             detached: true,

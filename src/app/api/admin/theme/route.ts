@@ -167,6 +167,9 @@ export async function POST(request: NextRequest) {
     // 写入数据库并立即刷新内存缓存
     await db.saveAdminConfig(adminConfig);
     await setCachedConfig(adminConfig);
+    clearPublicRouteCaches();
+    (globalThis as any).__moontvPublicRouteCache?.clear?.();
+    await setCachedConfig(adminConfig);
 
     return NextResponse.json(
       {

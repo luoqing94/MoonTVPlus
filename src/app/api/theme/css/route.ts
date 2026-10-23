@@ -3,133 +3,126 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getConfig } from '@/lib/config';
-
 import { getThemeCSS } from '@/styles/themes';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const SSR_CACHE_KEY = '/api/theme/css';
-const SSR_CACHE_TTL_MS = 60 * 1000;
 const PUBLIC_CACHE_CONTROL = 'public, max-age=0, s-maxage=60, stale-while-revalidate=300';
 const PUBLIC_CDN_CACHE_CONTROL = 'public, s-maxage=60, stale-while-revalidate=300';
-const PUBLIC_EO_CDN_CACHE_CONTROL = 'public, s-maxage=60, stale-while-revalidate=300, durable';
+const PUBLIC_CACHE_TTL_MS = 60 * 1000;
 
-function getSsrCacheStore(): Map<string, { css: string; etag: string; expiresAt: number }> {
-  const g = globalThis as any;
-  if (!(g.__moontvSsrPublicCache instanceof Map)) {
-    g.__moontvSsrPublicCache = new Map();
-  }
-  return g.__moontvSsrPublicCache;
+interface CachedThemeResponse {
+  css: string;
+  etag: string;
+  expiresAt: number;
 }
 
-function getSsrInflightStore(): Map<string, Promise<{ css: string; etag: string }>> {
+function getRouteCache(): Map<string, CachedThemeResponse> {
   const g = globalThis as any;
-  if (!(g.__moontvSsrPublicInflight instanceof Map)) {
-    g.__moontvSsrPublicInflight = new Map();
+  if (!(g.__moontvPublicRouteCache instanceof Map)) {
+    g.__moontvPublicRouteCache = new Map();
   }
-  return g.__moontvSsrPublicInflight;
+  return g.__moontvPublicRouteCache;
+}
+
+function getRouteInflight(): Map<string, Promise<CachedThemeResponse>> {
+  const g = globalThis as any;
+  if (!(g.__moontvPublicRouteInflight instanceof Map)) {
+    g.__moontvPublicRouteInflight = new Map();
+  }
+  return g.__moontvPublicRouteInflight;
+}
+
+async function computeThemeResponse(): Promise<CachedThemeResponse> {
+  const adminConfig = await getConfig();
+  const themeConfig = adminConfig?.ThemeConfig;
+
+  if (!themeConfig) {
+    return {
+      css: '',
+      etag: '"0"',
+      expiresAt: Date.now() + PUBLIC_CACHE_TTL_MS,
+    };
+  }
+
+  const css = themeConfig.enableBuiltInTheme
+    ? getThemeCSS(themeConfig.builtInTheme as any)
+    : themeConfig.customCSS || '';
+  const etag = `"${themeConfig.cacheVersion ?? 0}"`;
+
+  return {
+    css,
+    etag,
+    expiresAt: Date.now() + PUBLIC_CACHE_TTL_MS,
+  };
 }
 
 export async function GET(request: NextRequest) {
   try {
+    const cacheKey = '/api/theme/css';
+    const cache = getRouteCache();
+    const inflight = getRouteInflight();
     const now = Date.now();
-    const cacheStore = getSsrCacheStore();
-    const cached = cacheStore.get(SSR_CACHE_KEY);
 
-    if (cached && cached.expiresAt > now) {
-      const ifNoneMatch = request.headers.get('if-none-match');
-      if (ifNoneMatch && cached.etag && ifNoneMatch === cached.etag) {
-        return new NextResponse(null, {
-          status: 304,
-          headers: {
-            'Cache-Control': PUBLIC_CACHE_CONTROL,
-            'CDN-Cache-Control': PUBLIC_CDN_CACHE_CONTROL,
-            'EO-CDN-Cache-Control': PUBLIC_EO_CDN_CACHE_CONTROL,
-            ETag: cached.etag,
-            'x-moontv-ssr-cache': 'HIT',
-            'x-eo-ssr-cache': 'HIT-SSR',
-          },
+    let entry = cache.get(cacheKey);
+    let cacheStatus: 'HIT' | 'MISS' = 'HIT';
+
+    if (!entry || entry.expiresAt <= now) {
+      cacheStatus = 'MISS';
+      let pending = inflight.get(cacheKey);
+      let coalesced = false;
+      if (pending) {
+        coalesced = true;
+      } else {
+        pending = computeThemeResponse().then((res) => {
+          cache.set(cacheKey, res);
+          return res;
         });
+        inflight.set(cacheKey, pending);
       }
-      return new NextResponse(cached.css, {
-        headers: {
-          'Content-Type': 'text/css; charset=utf-8',
-          'Cache-Control': PUBLIC_CACHE_CONTROL,
-          'CDN-Cache-Control': PUBLIC_CDN_CACHE_CONTROL,
-          'EO-CDN-Cache-Control': PUBLIC_EO_CDN_CACHE_CONTROL,
-          ETag: cached.etag,
-          'x-moontv-ssr-cache': 'HIT',
-          'x-eo-ssr-cache': 'HIT-SSR',
-        },
-      });
-    }
-
-    const inflightStore = getSsrInflightStore();
-    let pending = inflightStore.get(SSR_CACHE_KEY);
-    const wasCoalesced = Boolean(pending);
-    if (!pending) {
-      pending = (async () => {
-        const adminConfig = await getConfig();
-        const themeConfig = adminConfig.ThemeConfig;
-        if (!themeConfig) {
-          return { css: '', etag: '"0"' };
+      try {
+        entry = await pending;
+        if (coalesced) {
+          cacheStatus = 'HIT';
         }
-        const css = themeConfig.enableBuiltInTheme
-          ? getThemeCSS(themeConfig.builtInTheme as any)
-          : themeConfig.customCSS || '';
-        const etag = `"${themeConfig.cacheVersion || 0}"`;
-        cacheStore.set(SSR_CACHE_KEY, {
-          css,
-          etag,
-          expiresAt: Date.now() + SSR_CACHE_TTL_MS,
-        });
-        return { css, etag };
-      })();
-      inflightStore.set(SSR_CACHE_KEY, pending);
-    }
-
-    let resolved: { css: string; etag: string };
-    try {
-      resolved = await pending;
-    } finally {
-      if (!wasCoalesced) {
-        inflightStore.delete(SSR_CACHE_KEY);
+      } finally {
+        if (!coalesced) {
+          inflight.delete(cacheKey);
+        }
       }
     }
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'text/css; charset=utf-8',
+      'Cache-Control': PUBLIC_CACHE_CONTROL,
+      'CDN-Cache-Control': PUBLIC_CDN_CACHE_CONTROL,
+      ETag: entry.etag,
+      'x-moontv-ssr-cache': cacheStatus,
+      'x-eo-ssr-cache': cacheStatus === 'HIT' ? 'HIT-SSR' : 'MISS-SSR',
+    };
 
     const ifNoneMatch = request.headers.get('if-none-match');
-    if (ifNoneMatch && resolved.etag && ifNoneMatch === resolved.etag) {
+    if (ifNoneMatch && ifNoneMatch === entry.etag) {
       return new NextResponse(null, {
         status: 304,
-        headers: {
-          'Cache-Control': PUBLIC_CACHE_CONTROL,
-          'CDN-Cache-Control': PUBLIC_CDN_CACHE_CONTROL,
-          'EO-CDN-Cache-Control': PUBLIC_EO_CDN_CACHE_CONTROL,
-          ETag: resolved.etag,
-          'x-moontv-ssr-cache': wasCoalesced ? 'HIT' : 'MISS',
-          'x-eo-ssr-cache': wasCoalesced ? 'HIT-SSR' : 'MISS-SSR',
-        },
+        headers,
       });
     }
 
-    return new NextResponse(resolved.css, {
-      headers: {
-        'Content-Type': 'text/css; charset=utf-8',
-        'Cache-Control': PUBLIC_CACHE_CONTROL,
-        'CDN-Cache-Control': PUBLIC_CDN_CACHE_CONTROL,
-        'EO-CDN-Cache-Control': PUBLIC_EO_CDN_CACHE_CONTROL,
-        ETag: resolved.etag,
-        'x-moontv-ssr-cache': wasCoalesced ? 'HIT' : 'MISS',
-        'x-eo-ssr-cache': wasCoalesced ? 'HIT-SSR' : 'MISS-SSR',
-      },
+    return new NextResponse(entry.css, {
+      status: 200,
+      headers,
     });
   } catch (error) {
     console.error('获取主题CSS失败:', error);
     return new NextResponse('', {
       headers: {
         'Content-Type': 'text/css; charset=utf-8',
-        'Cache-Control': 'no-store',
+        'Cache-Control': PUBLIC_CACHE_CONTROL,
+        'CDN-Cache-Control': PUBLIC_CDN_CACHE_CONTROL,
+        'x-moontv-ssr-cache': 'MISS',
+        'x-eo-ssr-cache': 'MISS-SSR',
       },
     });
   }
