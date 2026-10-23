@@ -530,7 +530,11 @@ async function __edgeoneOriginFetchWithCache(request, urlInfo, fetchFn, middlewa
           const v = res.headers.get(k);
           if (v) storedHeaders.push([k, v]);
         }
-        storedHeaders.push(['cache-control', 'no-cache']);
+        storedHeaders.push(['cache-control', isPublicApi ? 'public, max-age=0, s-maxage=60, stale-while-revalidate=300' : 'no-cache']);
+                if (isPublicApi) {
+                  storedHeaders.push(['cdn-cache-control', 'public, s-maxage=60, stale-while-revalidate=300']);
+                  storedHeaders.push(['eo-cdn-cache-control', 'public, s-maxage=60, stale-while-revalidate=300, durable']);
+                }
         const entry = {
           body: bodyText,
           headers: storedHeaders,
@@ -824,7 +828,11 @@ function __edgeoneWrapHandler(fn) {
                 const v = rawRes.headers.get(k);
                 if (v) storedHeaders.push([k, v]);
               }
-              storedHeaders.push(['cache-control', 'no-cache']);
+              storedHeaders.push(['cache-control', isPublicApi ? 'public, max-age=0, s-maxage=60, stale-while-revalidate=300' : 'no-cache']);
+                if (isPublicApi) {
+                  storedHeaders.push(['cdn-cache-control', 'public, s-maxage=60, stale-while-revalidate=300']);
+                  storedHeaders.push(['eo-cdn-cache-control', 'public, s-maxage=60, stale-while-revalidate=300, durable']);
+                }
               const entry = {
                 body: bodyText,
                 headers: storedHeaders,
@@ -944,6 +952,263 @@ function runPostBuildPatches() {
   ]) {
     rmSync(envPath, { force: true });
   }
+}
+
+
+function patchCompiledMiddlewareOutput() {
+  const candidates = [
+    path.join(process.cwd(), '.next', 'server', 'src', 'middleware.js'),
+    path.join(process.cwd(), '.next', 'standalone', '.next', 'server', 'src', 'middleware.js'),
+    path.join(process.cwd(), '.next', 'server', 'middleware.js'),
+    path.join(process.cwd(), '.next', 'standalone', '.next', 'server', 'middleware.js'),
+  ];
+
+  const snippet = `
+;/* moontv-edge-fetch-cache-v2 */
+(function() {
+  try {
+    var g = typeof globalThis !== 'undefined' ? globalThis : (typeof self !== 'undefined' ? self : this);
+    if (!g || g.__moontvEdgeFetchPatchedV2 || typeof g.fetch !== 'function') return;
+    g.__moontvEdgeFetchPatchedV2 = true;
+    var _origFetch = g.fetch.bind(g);
+    var __moontvEdgeCachedFetch = async function(input, init) {
+      var cleanInit = init;
+      if (cleanInit && typeof cleanInit === 'object' && 'eo' in cleanInit) {
+        var rest = {};
+        for (var k in cleanInit) {
+          if (k !== 'eo') rest[k] = cleanInit[k];
+        }
+        cleanInit = rest;
+      }
+      try {
+        var reqUrlStr = typeof input === 'string' ? input : (input && typeof input.url === 'string' ? input.url : '');
+        if (!reqUrlStr) return _origFetch(input, cleanInit);
+        var reqMethod = String((cleanInit && cleanInit.method) || (input && input.method) || 'GET').toUpperCase();
+        var u = new URL(reqUrlStr, 'http://localhost');
+        var p = u.pathname;
+        if (reqMethod !== 'GET' && reqMethod !== 'HEAD') {
+          if (p.indexOf('/api/admin') === 0) {
+            if (g.__moontvEdgePublicCache instanceof Map) g.__moontvEdgePublicCache.clear();
+            if (g.__moontvEdgePublicInflight instanceof Map) g.__moontvEdgePublicInflight.clear();
+          }
+          return _origFetch(input, cleanInit);
+        }
+        var isPublicApi = (p === '/api/theme/css' || p === '/api/server-config');
+        var isLoginHtml = (p === '/login');
+        if (!isPublicApi && !isLoginHtml) {
+          return _origFetch(input, cleanInit);
+        }
+        var hdrs = (cleanInit && cleanInit.headers) || (input && input.headers);
+        var getHdr = function(name) {
+          if (!hdrs) return '';
+          if (typeof hdrs.get === 'function') return hdrs.get(name) || '';
+          return hdrs[name] || hdrs[name.toLowerCase()] || '';
+        };
+        if (isLoginHtml) {
+          var cookieStr = getHdr('cookie');
+          var rscHdr = getHdr('rsc') || getHdr('next-router-state-tree');
+          if (rscHdr || u.searchParams.has('_rsc') || (cookieStr && (cookieStr.indexOf('auth=') !== -1 || cookieStr.indexOf('user_auth=') !== -1))) {
+            return _origFetch(input, cleanInit);
+          }
+        }
+        var cacheKey = reqMethod + ':' + p + (isLoginHtml ? (u.search || '') : '');
+        if (!(g.__moontvEdgePublicCache instanceof Map)) g.__moontvEdgePublicCache = new Map();
+        if (!(g.__moontvEdgePublicInflight instanceof Map)) g.__moontvEdgePublicInflight = new Map();
+        var now = Date.now();
+        var cached = g.__moontvEdgePublicCache.get(cacheKey);
+        if (cached && cached.expiresAt > now) {
+          var ch = new Headers(cached.headers);
+          ch.set('x-eo-edge-cache', 'HIT-EDGE');
+          if (isPublicApi) {
+            ch.set('cache-control', 'public, max-age=0, s-maxage=60, stale-while-revalidate=300');
+            ch.set('cdn-cache-control', 'public, s-maxage=60, stale-while-revalidate=300');
+            ch.set('eo-cdn-cache-control', 'public, s-maxage=60, stale-while-revalidate=300, durable');
+          }
+          return new Response(reqMethod === 'HEAD' ? null : cached.body.slice(0), {
+            status: cached.status,
+            headers: ch
+          });
+        }
+        var pending = g.__moontvEdgePublicInflight.get(cacheKey);
+        var wasCoalesced = Boolean(pending);
+        if (!pending) {
+          pending = (async function() {
+            var res = await _origFetch(input, cleanInit);
+            if (res && res.status === 200) {
+              var buf = await res.arrayBuffer();
+              var storedHeaders = [];
+              var hasCacheControl = false;
+              res.headers.forEach(function(v, k) {
+                var lk = k.toLowerCase();
+                if (lk === 'set-cookie' || lk === 'content-encoding' || lk === 'content-length' || lk === 'transfer-encoding') return;
+                if (lk === 'cache-control') {
+                  hasCacheControl = true;
+                  storedHeaders.push([k, isPublicApi ? 'public, max-age=0, s-maxage=60, stale-while-revalidate=300' : v]);
+                  return;
+                }
+                storedHeaders.push([k, v]);
+              });
+              if (!hasCacheControl) {
+                storedHeaders.push(['cache-control', isPublicApi ? 'public, max-age=0, s-maxage=60, stale-while-revalidate=300' : 'no-cache']);
+              }
+              var entry = {
+                status: res.status,
+                headers: storedHeaders,
+                body: buf,
+                expiresAt: Date.now() + 60000
+              };
+              g.__moontvEdgePublicCache.set(cacheKey, entry);
+              return { entry: entry, passthrough: null };
+            }
+            return { entry: null, passthrough: res };
+          })();
+          g.__moontvEdgePublicInflight.set(cacheKey, pending);
+        }
+        var out;
+        try {
+          out = await pending;
+        } finally {
+          if (!wasCoalesced) g.__moontvEdgePublicInflight.delete(cacheKey);
+        }
+        if (out && out.entry) {
+          var fh = new Headers(out.entry.headers);
+          fh.set('x-eo-edge-cache', wasCoalesced ? 'HIT-EDGE' : 'MISS-EDGE');
+          if (isPublicApi) {
+            fh.set('cache-control', 'public, max-age=0, s-maxage=60, stale-while-revalidate=300');
+            fh.set('cdn-cache-control', 'public, s-maxage=60, stale-while-revalidate=300');
+            fh.set('eo-cdn-cache-control', 'public, s-maxage=60, stale-while-revalidate=300, durable');
+          }
+          return new Response(reqMethod === 'HEAD' ? null : out.entry.body.slice(0), {
+            status: out.entry.status,
+            headers: fh
+          });
+        }
+        return out ? out.passthrough : _origFetch(input, cleanInit);
+      } catch (_err) {
+        return _origFetch(input, cleanInit);
+      }
+    };
+    try {
+      Object.defineProperty(g, 'fetch', {
+        configurable: true,
+        enumerable: true,
+        get: function() { return __moontvEdgeCachedFetch; },
+        set: function() {}
+      });
+    } catch (_) {
+      g.fetch = __moontvEdgeCachedFetch;
+    }
+  } catch (_) {}
+})();
+`;
+
+  for (const file of candidates) {
+    if (!fs.existsSync(file)) continue;
+    const raw = fs.readFileSync(file, 'utf8');
+    if (raw.includes('moontv-edge-fetch-cache-v2')) continue;
+    fs.writeFileSync(file, raw + '\n' + snippet, 'utf8');
+    console.log('[edgeone-build] Injected moontv-edge-fetch-cache-v2 into ' + path.relative(process.cwd(), file));
+  }
+}
+
+
+function patchEdgeOneCliForGithubDeploy(cliPath) {
+  if (!fs.existsSync(cliPath)) return false;
+  const raw = fs.readFileSync(cliPath, 'utf8');
+  if (raw.includes('/* moontv-github-deploy-interceptor */')) return false;
+
+  const interceptor = `/* moontv-github-deploy-interceptor */
+if (process.argv.includes('deploy') && process.env.GITHUB_ACTIONS === 'true' && process.env.EDGEONE_API_TOKEN) {
+  await (async () => {
+    try {
+      const token = process.env.EDGEONE_API_TOKEN;
+      const nIdx = process.argv.indexOf('-n');
+      const reqName = (nIdx !== -1 && process.argv[nIdx + 1]) ? process.argv[nIdx + 1] : (process.env.EDGEONE_PROJECT_NAME || 'moontvplus-edge');
+      const apiCall = async (body) => {
+        const res = await fetch('https://pages-api.cloud.tencent.com/v1', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + token,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        });
+        return await res.json();
+      };
+      const projRes = await apiCall({ Action: 'DescribePagesProjects', PageNumber: 1, PageSize: 50 });
+      const projects = projRes?.Data?.Response?.Projects || [];
+      const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const project = projects.find((p) => p.Name === reqName || p.ProjectId === reqName) ||
+                      projects.find((p) => norm(p.Name) === norm(reqName) || norm(p.RepoName) === norm(reqName));
+      if (project && project.Provider === 'Github') {
+        const projectId = project.ProjectId;
+        const repoBranch = process.env.GITHUB_REF_NAME || 'custom/live';
+        const repoCommit = process.env.GITHUB_SHA || '';
+        console.log('[edgeone-github-deploy] Matched GitHub-linked project: ' + project.Name + ' (' + projectId + ')');
+        let deploymentId = '';
+        const listRes = await apiCall({ Action: 'DescribePagesDeployments', ProjectId: projectId, PageNumber: 1, PageSize: 10 });
+        const existing = (listRes?.Data?.Response?.Deployments || []).find(
+          (d) => d.Env === 'Production' && d.RepoCommitHash === repoCommit && (d.Status === 'Building' || d.Status === 'Pending' || d.Status === 'Success')
+        );
+        if (existing) {
+          deploymentId = existing.DeploymentId;
+          console.log('[edgeone-github-deploy] Reusing existing Production deployment: ' + deploymentId + ' (Status: ' + existing.Status + ')');
+        } else {
+          const createBody = {
+            Action: 'CreatePagesDeployment',
+            ProjectId: projectId,
+            ViaMeta: 'Github',
+            Provider: 'Github',
+            Env: 'Production',
+            RepoBranch: repoBranch,
+          };
+          if (repoCommit && repoCommit.length === 40) {
+            createBody.RepoCommitHash = repoCommit;
+          }
+          const createRes = await apiCall(createBody);
+          deploymentId = createRes?.Data?.Response?.DeploymentId || '';
+          if (!deploymentId) {
+            console.error('[edgeone-github-deploy] CreatePagesDeployment failed:', JSON.stringify(createRes));
+            process.exit(1);
+          }
+          console.log('[edgeone-github-deploy] Triggered Production Cloud Builder deployment: ' + deploymentId);
+        }
+        const deadline = Date.now() + 10 * 60 * 1000;
+        while (Date.now() < deadline) {
+          const pollRes = await apiCall({ Action: 'DescribePagesDeployments', ProjectId: projectId, PageNumber: 1, PageSize: 10 });
+          const d = (pollRes?.Data?.Response?.Deployments || []).find((x) => x.DeploymentId === deploymentId);
+          if (d) {
+            console.log('[edgeone-github-deploy] Deployment ' + deploymentId + ' status: ' + d.Status);
+            if (d.Status === 'Success') {
+              const customDomain = project.CustomDomains?.[0]?.Domain;
+              const deployUrl = customDomain ? ('https://' + customDomain + '/') : ('https://' + project.Name + '.edgeone.run/');
+              console.log('Deployment complete!');
+              console.log('ProjectId: ' + projectId);
+              console.log('PreviewUrl: ' + deployUrl);
+              process.exit(0);
+            }
+            if (d.Status === 'Failed' || d.Status === 'Canceled') {
+              console.error('[edgeone-github-deploy] Deployment failed:', JSON.stringify(d));
+              process.exit(1);
+            }
+          }
+          await new Promise((r) => setTimeout(r, 5000));
+        }
+        console.error('[edgeone-github-deploy] Timed out waiting for deployment ' + deploymentId);
+        process.exit(1);
+      }
+    } catch (err) {
+      console.warn('[edgeone-github-deploy] Fallback to standard CLI due to error:', err?.message || err);
+    }
+  })();
+}
+`;
+
+  const updated = raw.startsWith('#!')
+    ? raw.replace(/^#!.*\n/, (m) => m + interceptor + '\n')
+    : interceptor + '\n' + raw;
+  fs.writeFileSync(cliPath, updated, 'utf8');
+  return true;
 }
 
 function patchEdgeOneCli() {

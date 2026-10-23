@@ -1,13 +1,9 @@
 {
-  "$schema": "https://edgeone.ai/schema/edgeone.json",
-  "installCommand": "pnpm install --frozen-lockfile",
-  "buildCommand": "pnpm edgeone:build",
+  "buildCommand": "pnpm run build:edgeone",
+  "installCommand": "pnpm install --no-frozen-lockfile",
   "outputDirectory": ".edgeone",
-  "nodeVersion": "24",
   "cloudFunctions": {
-    "nodejs": {
-      "maxDuration": 120
-    }
+    "maxDuration": 120
   },
   "headers": [
     {
@@ -16,10 +12,6 @@
         {
           "key": "Cache-Control",
           "value": "public, max-age=31536000, immutable"
-        },
-        {
-          "key": "CDN-Cache-Control",
-          "value": "public, s-maxage=31536000, immutable"
         }
       ]
     },
@@ -29,49 +21,6 @@
         {
           "key": "Cache-Control",
           "value": "public, max-age=604800, stale-while-revalidate=86400"
-        },
-        {
-          "key": "CDN-Cache-Control",
-          "value": "public, s-maxage=604800, stale-while-revalidate=86400"
-        }
-      ]
-    },
-    {
-      "source": "/logo.png",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=86400, stale-while-revalidate=604800"
-        },
-        {
-          "key": "CDN-Cache-Control",
-          "value": "public, s-maxage=86400, stale-while-revalidate=604800"
-        }
-      ]
-    },
-    {
-      "source": "/favicon.ico",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=86400, stale-while-revalidate=604800"
-        },
-        {
-          "key": "CDN-Cache-Control",
-          "value": "public, s-maxage=86400, stale-while-revalidate=604800"
-        }
-      ]
-    },
-    {
-      "source": "/manifest.json",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=3600, stale-while-revalidate=86400"
-        },
-        {
-          "key": "CDN-Cache-Control",
-          "value": "public, s-maxage=3600, stale-while-revalidate=86400"
         }
       ]
     },
@@ -80,11 +29,11 @@
       "headers": [
         {
           "key": "Cache-Control",
-          "value": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
+          "value": "public, max-age=0, s-maxage=60, stale-while-revalidate=300"
         },
         {
           "key": "CDN-Cache-Control",
-          "value": "public, s-maxage=86400, stale-while-revalidate=86400"
+          "value": "public, s-maxage=60, stale-while-revalidate=300"
         }
       ]
     },
@@ -93,7 +42,7 @@
       "headers": [
         {
           "key": "Cache-Control",
-          "value": "public, max-age=60, s-maxage=60, stale-while-revalidate=300"
+          "value": "public, max-age=0, s-maxage=60, stale-while-revalidate=300"
         },
         {
           "key": "CDN-Cache-Control",
@@ -113,7 +62,7 @@
     },
     {
       "source": "/logo.png",
-      "cacheTtl": 86400
+      "cacheTtl": 604800
     },
     {
       "source": "/favicon.ico",
@@ -121,11 +70,11 @@
     },
     {
       "source": "/manifest.json",
-      "cacheTtl": 3600
+      "cacheTtl": 86400
     },
     {
       "source": "/api/theme/css",
-      "cacheTtl": 3600
+      "cacheTtl": 60
     },
     {
       "source": "/api/server-config",

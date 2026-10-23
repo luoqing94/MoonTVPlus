@@ -1243,6 +1243,7 @@ export async function resetConfig() {
     originConfig.ConfigSubscribtion
   );
   cachedConfig = adminConfig;
+  clearPublicRouteCaches();
   await db.saveAdminConfig(adminConfig);
 
   return;
@@ -1327,11 +1328,21 @@ export async function getAvailableApiSites(
   return allApiSites;
 }
 
+function clearPublicRouteCaches() {
+  const g = globalThis as any;
+  if (g.__moontvSsrPublicCache instanceof Map) g.__moontvSsrPublicCache.clear();
+  if (g.__moontvSsrPublicInflight instanceof Map) g.__moontvSsrPublicInflight.clear();
+  if (g.__moontvEdgePublicCache instanceof Map) g.__moontvEdgePublicCache.clear();
+  if (g.__moontvEdgePublicInflight instanceof Map) g.__moontvEdgePublicInflight.clear();
+}
+
 export async function setCachedConfig(config: AdminConfig) {
   cachedConfig = config;
+  clearPublicRouteCaches();
 }
 
 export async function clearConfigCache() {
   cachedConfig = null as any;
   configInitPromise = null;
+  clearPublicRouteCaches();
 }
