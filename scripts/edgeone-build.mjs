@@ -37,6 +37,36 @@ function loadLocalEnvFile() {
 
 loadLocalEnvFile();
 
+let createdTempEnvProduction = false;
+const prodEnvFile = join(process.cwd(), '.env.production');
+if (!existsSync(prodEnvFile) && process.env.NEXT_PUBLIC_STORAGE_TYPE) {
+  const prodKeys = [
+    'USERNAME',
+    'PASSWORD',
+    'NEXT_PUBLIC_STORAGE_TYPE',
+    'UPSTASH_URL',
+    'UPSTASH_TOKEN',
+    'NEXT_PUBLIC_SITE_NAME',
+    'SITE_BASE',
+    'NEXT_PUBLIC_SEARCH_MAX_PAGE',
+    'NEXT_PUBLIC_DOUBAN_PROXY_TYPE',
+    'NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE',
+    'CRON_WAIT_FOR_COMPLETION',
+    'WATCH_ROOM_ENABLED',
+  ];
+  const lines = [];
+  for (const k of prodKeys) {
+    const val = process.env[k] ?? (k === 'CRON_WAIT_FOR_COMPLETION' ? 'true' : undefined);
+    if (val !== undefined && val !== '') {
+      lines.push(`${k}=${val}`);
+    }
+  }
+  if (lines.length > 0) {
+    writeFileSync(prodEnvFile, `${lines.join('\n')}\n`);
+    createdTempEnvProduction = true;
+  }
+}
+
 const runtimeEnvKeys = [
   'USERNAME',
   'PASSWORD',
@@ -918,6 +948,27 @@ child.on('exit', (code, signal) => {
     const prodEnvDst = join(process.cwd(), '.edgeone', 'cloud-functions', 'ssr-node', '.env.production');
     if (existsSync(prodEnvSrc) && existsSync(join(process.cwd(), '.edgeone', 'cloud-functions', 'ssr-node'))) {
       copyFileSync(prodEnvSrc, prodEnvDst);
+    }
+    if (createdTempEnvProduction) {
+      rmSync(prodEnvSrc, { force: true });
+    }
+    try {
+      const cliPath = join(process.cwd(), 'node_modules', 'edgeone', 'edgeone-dist', 'cli.js');
+      if (existsSync(cliPath)) {
+        const cliCode = readFileSync(cliPath, 'utf8');
+        const cliTarget = 'vs(`Console URL: ${S}`)';
+        if (cliCode.includes(cliTarget) && !cliCode.includes('EDGEONE_DEPLOY_URL=')) {
+          writeFileSync(
+            cliPath,
+            cliCode.replace(
+              cliTarget,
+              `${cliTarget},console.log(\`EDGEONE_DEPLOY_URL=\${b.url}\\nEDGEONE_PROJECT_ID=\${b.projectId}\`)`
+            )
+          );
+        }
+      }
+    } catch {
+      // ignore optional CLI output patch
     }
 
     for (const envPath of [
