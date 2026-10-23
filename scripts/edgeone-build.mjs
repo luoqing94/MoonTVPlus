@@ -916,72 +916,135 @@ function patchSsrNodeHandlerStatus() {
   console.warn('[edgeone-build] ssr-node handler not found, skip status patch');
 }
 
-const isInsideEdgeOneBuilder = process.env.NEXT_PRIVATE_STANDALONE === 'true';
-
-const command = isInsideEdgeOneBuilder
-  ? 'BUILD_TARGET=edgeone EDGEONE_PAGES=1 pnpm build'
-  : 'BUILD_TARGET=edgeone EDGEONE_PAGES=1 edgeone makers build';
-
-const child = spawn(command, {
-  stdio: 'inherit',
-  shell: true,
-  env: {
-    ...process.env,
-    BUILD_TARGET: 'edgeone',
-    EDGEONE_PAGES: '1',
-  },
-});
-
-child.on('exit', (code, signal) => {
-  if (!signal && code === 0) {
-    for (const file of ['edgeone.json', 'package.json']) {
-      copyFileSync(join(process.cwd(), file), join(process.cwd(), '.edgeone', file));
+function runPostBuildPatches() {
+  const edgeoneDir = join(process.cwd(), '.edgeone');
+  mkdirSync(edgeoneDir, { recursive: true });
+  for (const file of ['edgeone.json', 'package.json']) {
+    const src = join(process.cwd(), file);
+    if (existsSync(src)) {
+      copyFileSync(src, join(edgeoneDir, file));
     }
+  }
 
-    patchEdgeOneOutputHeaders();
-    patchEdgeFunctionEnvInjection();
-    patchEdgeFunctionMiddlewareConfig();
-    patchSsrNodeRoutes();
-    patchSsrNodeHandlerStatus();
+  patchEdgeOneOutputHeaders();
+  patchEdgeFunctionEnvInjection();
+  patchEdgeFunctionMiddlewareConfig();
+  patchSsrNodeRoutes();
+  patchSsrNodeHandlerStatus();
 
-    const prodEnvSrc = join(process.cwd(), '.env.production');
-    const prodEnvDst = join(process.cwd(), '.edgeone', 'cloud-functions', 'ssr-node', '.env.production');
-    if (existsSync(prodEnvSrc) && existsSync(join(process.cwd(), '.edgeone', 'cloud-functions', 'ssr-node'))) {
-      copyFileSync(prodEnvSrc, prodEnvDst);
+  const prodEnvSrc = join(process.cwd(), '.env.production');
+  const prodEnvDst = join(edgeoneDir, 'cloud-functions', 'ssr-node', '.env.production');
+  if (existsSync(prodEnvSrc) && existsSync(join(edgeoneDir, 'cloud-functions', 'ssr-node'))) {
+    copyFileSync(prodEnvSrc, prodEnvDst);
+  }
+
+  for (const envPath of [
+    join(edgeoneDir, '.env'),
+    join(edgeoneDir, 'cloud-functions', 'ssr-node', '.env'),
+  ]) {
+    rmSync(envPath, { force: true });
+  }
+}
+
+function patchEdgeOneCli() {
+  try {
+    const cliPath = join(process.cwd(), 'node_modules', 'edgeone', 'edgeone-dist', 'cli.js');
+    if (!existsSync(cliPath)) return;
+    let cliCode = readFileSync(cliPath, 'utf8');
+    let changed = false;
+    const cliTarget = 'vs(`Console URL: ${S}`)';
+    if (cliCode.includes(cliTarget) && !cliCode.includes('EDGEONE_DEPLOY_URL=')) {
+      cliCode = cliCode.replace(
+        cliTarget,
+        `${cliTarget},console.log(\`EDGEONE_DEPLOY_URL=\${b.url}\\nEDGEONE_PROJECT_ID=\${b.projectId}\`)`
+      );
+      changed = true;
     }
-    if (createdTempEnvProduction) {
-      rmSync(prodEnvSrc, { force: true });
+    if (cliCode.includes('.Provider!=="Upload"')) {
+      cliCode = cliCode.replaceAll('.Provider!=="Upload"', '.Provider==="NEVER_BLOCK"');
+      changed = true;
     }
-    try {
-      const cliPath = join(process.cwd(), 'node_modules', 'edgeone', 'edgeone-dist', 'cli.js');
-      if (existsSync(cliPath)) {
-        const cliCode = readFileSync(cliPath, 'utf8');
-        const cliTarget = 'vs(`Console URL: ${S}`)';
-        if (cliCode.includes(cliTarget) && !cliCode.includes('EDGEONE_DEPLOY_URL=')) {
-          writeFileSync(
-            cliPath,
-            cliCode.replace(
-              cliTarget,
-              `${cliTarget},console.log(\`EDGEONE_DEPLOY_URL=\${b.url}\\nEDGEONE_PROJECT_ID=\${b.projectId}\`)`
-            )
-          );
+    if (cliCode.includes('.Provider !== "Upload"')) {
+      cliCode = cliCode.replaceAll('.Provider !== "Upload"', '.Provider === "NEVER_BLOCK"');
+      changed = true;
+    }
+    if (changed) {
+      writeFileSync(cliPath, cliCode);
+      console.log('[edgeone-build] Patched local edgeone CLI for GitHub-linked project deploy');
+    }
+  } catch {
+    // ignore optional CLI patch
+  }
+}
+
+if (process.argv.includes('--post-opennext-patch')) {
+  const start = Date.now();
+  const efPath = join(process.cwd(), '.edgeone', 'edge-functions', 'index.js');
+  const ssrPath = join(process.cwd(), '.edgeone', 'cloud-functions', 'ssr-node', 'handler.js');
+  const timer = setInterval(() => {
+    const efReady =
+      existsSync(efPath) && !readFileSync(efPath, 'utf8').includes("'__MIDDLEWARE_BUNDLE_CODE__'");
+    const ssrReady = existsSync(ssrPath);
+    if (efReady && ssrReady) {
+      clearInterval(timer);
+      try {
+        runPostBuildPatches();
+      } catch {
+        // ignore
+      }
+      process.exit(0);
+    }
+    if (Date.now() - start > 30000) {
+      clearInterval(timer);
+      process.exit(0);
+    }
+  }, 50);
+} else {
+  patchEdgeOneCli();
+
+  const isInsideEdgeOneBuilder = process.env.NEXT_PRIVATE_STANDALONE === 'true';
+
+  const command = isInsideEdgeOneBuilder
+    ? 'BUILD_TARGET=edgeone EDGEONE_PAGES=1 pnpm build'
+    : 'BUILD_TARGET=edgeone EDGEONE_PAGES=1 edgeone makers build';
+
+  const child = spawn(command, {
+    stdio: 'inherit',
+    shell: true,
+    env: {
+      ...process.env,
+      BUILD_TARGET: 'edgeone',
+      EDGEONE_PAGES: '1',
+    },
+  });
+
+  child.on('exit', (code, signal) => {
+    if (!signal && code === 0) {
+      if (isInsideEdgeOneBuilder) {
+        try {
+          const watcher = spawn(process.execPath, [process.argv[1], '--post-opennext-patch'], {
+            detached: true,
+            stdio: 'ignore',
+            env: process.env,
+          });
+          watcher.unref();
+        } catch {
+          // ignore
+        }
+      } else {
+        runPostBuildPatches();
+        patchEdgeOneCli();
+        const prodEnvSrc = join(process.cwd(), '.env.production');
+        if (createdTempEnvProduction) {
+          rmSync(prodEnvSrc, { force: true });
         }
       }
-    } catch {
-      // ignore optional CLI output patch
     }
 
-    for (const envPath of [
-      join(process.cwd(), '.edgeone', '.env'),
-      join(process.cwd(), '.edgeone', 'cloud-functions', 'ssr-node', '.env'),
-    ]) {
-      rmSync(envPath, { force: true });
+    if (signal) {
+      process.kill(process.pid, signal);
+      return;
     }
-  }
-
-  if (signal) {
-    process.kill(process.pid, signal);
-    return;
-  }
-  process.exit(code ?? 1);
-});
+    process.exit(code ?? 1);
+  });
+}
