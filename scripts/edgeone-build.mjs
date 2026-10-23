@@ -4,12 +4,12 @@ import { copyFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'n
 import { join } from 'node:path';
 
 function loadLocalEnvFile() {
-  const envPath = join(process.cwd(), '.env');
-  if (!existsSync(envPath)) {
-    return;
-  }
-
-  const content = readFileSync(envPath, 'utf8');
+  for (const fileName of ['.env.production', '.env']) {
+    const envPath = join(process.cwd(), fileName);
+    if (!existsSync(envPath)) {
+      continue;
+    }
+    const content = readFileSync(envPath, 'utf8');
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith('#')) {
@@ -31,6 +31,7 @@ function loadLocalEnvFile() {
     }
 
     process.env[match[1]] = value;
+    }
   }
 }
 
@@ -198,7 +199,7 @@ function resolveEdgeOneMiddlewareSkipPaths() {
       skipPaths.add(path);
     }
   }
-  for (const staticPublicPath of ['/manifest.json', '/icons/', '/logo.png', '/robots.txt']) {
+  for (const staticPublicPath of ['/.well-known', '/manifest.json', '/icons/', '/logo.png', '/robots.txt']) {
     skipPaths.add(staticPublicPath);
   }
 
@@ -912,6 +913,12 @@ child.on('exit', (code, signal) => {
     patchEdgeFunctionMiddlewareConfig();
     patchSsrNodeRoutes();
     patchSsrNodeHandlerStatus();
+
+    const prodEnvSrc = join(process.cwd(), '.env.production');
+    const prodEnvDst = join(process.cwd(), '.edgeone', 'cloud-functions', 'ssr-node', '.env.production');
+    if (existsSync(prodEnvSrc) && existsSync(join(process.cwd(), '.edgeone', 'cloud-functions', 'ssr-node'))) {
+      copyFileSync(prodEnvSrc, prodEnvDst);
+    }
 
     for (const envPath of [
       join(process.cwd(), '.edgeone', '.env'),
