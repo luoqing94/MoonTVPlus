@@ -198,6 +198,9 @@ function resolveEdgeOneMiddlewareSkipPaths() {
       skipPaths.add(path);
     }
   }
+  for (const staticPublicPath of ['/manifest.json', '/icons/', '/logo.png', '/robots.txt']) {
+    skipPaths.add(staticPublicPath);
+  }
 
   const resolved = [...skipPaths].sort((a, b) => a.localeCompare(b));
   if (resolved.length === 0) {
@@ -328,6 +331,48 @@ function buildMatcherFallbackSnippet(skipPaths) {
   }`;
 }
 
+function patchEdgeOneOutputHeaders() {
+  const eoConfigPath = join(process.cwd(), '.edgeone', 'edgeone.json');
+  let config;
+  try {
+    config = JSON.parse(readFileSync(eoConfigPath, 'utf8'));
+  } catch {
+    return;
+  }
+  const existingHeaders = Array.isArray(config.headers) ? config.headers : [];
+  const defaultRules = [
+    {
+      source: '/_next/static/*',
+      headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
+    },
+    {
+      source: '/manifest.json',
+      headers: [{ key: 'Cache-Control', value: 'public, max-age=86400' }],
+    },
+    {
+      source: '/icons/*',
+      headers: [{ key: 'Cache-Control', value: 'public, max-age=604800' }],
+    },
+    {
+      source: '/logo.png',
+      headers: [{ key: 'Cache-Control', value: 'public, max-age=604800' }],
+    },
+    {
+      source: '/favicon.ico',
+      headers: [{ key: 'Cache-Control', value: 'public, max-age=604800' }],
+    },
+  ];
+  const merged = [...existingHeaders];
+  for (const rule of defaultRules) {
+    if (!merged.some((item) => item && item.source === rule.source)) {
+      merged.push(rule);
+    }
+  }
+  config.headers = merged;
+  writeFileSync(eoConfigPath, `${JSON.stringify(config, null, 2)}\n`);
+  console.log(`[edgeone-build] Patched .edgeone/edgeone.json static cache headers (${merged.length} rule(s))`);
+}
+
 function patchEdgeFunctionEnvInjection() {
   const edgeFunctionPath = join(process.cwd(), '.edgeone', 'edge-functions', 'index.js');
   let code;
@@ -384,8 +429,131 @@ function patchEdgeFunctionEnvInjection() {
     console.warn('[edgeone-build] Unable to patch middleware matcher fallback: target not found');
   }
 
+  const edgeCacheMarker = '/* edgeone-public-api-cache */';
+  const edgeCacheHelper = `${edgeCacheMarker}
+const __EO_PUBLIC_CACHE_TTL_MS = 60000;
+function __edgeoneInvalidatePublicCache() {
+  globalThis.__moontvEdgePublicCache = null;
+  globalThis.__moontvEdgePublicInflight = null;
+}
+async function __edgeoneOriginFetchWithCache(request, urlInfo, fetchFn, middlewareResponseHeaders) {
+  try {
+    const method = ((request && request.method) || 'GET').toUpperCase();
+    const parsedUrl = urlInfo || new URL(request.url);
+    const pathname = parsedUrl.pathname || '/';
+    if (method !== 'GET' && method !== 'HEAD') {
+      if (pathname.startsWith('/api/admin')) {
+        __edgeoneInvalidatePublicCache();
+      }
+      return await fetchFn(request);
+    }
+    const isPublicApi = pathname === '/api/theme/css' || pathname === '/api/server-config';
+    const cookieHeader = (request.headers && request.headers.get && request.headers.get('cookie')) || '';
+    const hasAuthCookie = /(?:^|;\\s*)auth=/.test(cookieHeader);
+    const isRsc = Boolean(
+      request.headers &&
+      request.headers.get &&
+      (request.headers.get('rsc') ||
+        request.headers.get('next-router-state-tree') ||
+        request.headers.get('next-router-prefetch'))
+    );
+    const isAnonLoginHtml =
+      (pathname === '/login' || pathname === '/tv/login') &&
+      !parsedUrl.search &&
+      !hasAuthCookie &&
+      !isRsc &&
+      !middlewareResponseHeaders;
+    if (!isPublicApi && !isAnonLoginHtml) {
+      return await fetchFn(request);
+    }
+    const cacheKey = pathname;
+    const now = Date.now();
+    const cache =
+      globalThis.__moontvEdgePublicCache ||
+      (globalThis.__moontvEdgePublicCache = new Map());
+    const cached = cache.get(cacheKey);
+    if (cached && now - cached.cachedAt < __EO_PUBLIC_CACHE_TTL_MS) {
+      const hitHeaders = new Headers(cached.headers);
+      hitHeaders.set('x-eo-edge-cache', 'HIT-EDGE');
+      return new Response(method === 'HEAD' ? null : cached.body, {
+        status: 200,
+        headers: hitHeaders,
+      });
+    }
+    if (method === 'HEAD') {
+      return await fetchFn(request);
+    }
+    const inflight =
+      globalThis.__moontvEdgePublicInflight ||
+      (globalThis.__moontvEdgePublicInflight = new Map());
+    let pending = inflight.get(cacheKey);
+    if (!pending) {
+      pending = (async () => {
+        const res = await fetchFn(request);
+        if (!res || res.status !== 200 || (res.headers && res.headers.get && res.headers.get('set-cookie'))) {
+          return { passthrough: res };
+        }
+        const bodyText = await res.text();
+        const storedHeaders = [];
+        for (const k of ['content-type', 'etag', 'link', 'vary', 'x-powered-by']) {
+          const v = res.headers.get(k);
+          if (v) storedHeaders.push([k, v]);
+        }
+        storedHeaders.push(['cache-control', 'no-cache']);
+        const entry = {
+          body: bodyText,
+          headers: storedHeaders,
+          cachedAt: Date.now(),
+        };
+        cache.set(cacheKey, entry);
+        return { entry };
+      })();
+      inflight.set(cacheKey, pending);
+      pending.finally(() => {
+        if (inflight.get(cacheKey) === pending) {
+          inflight.delete(cacheKey);
+        }
+      }).catch(() => {});
+    }
+    const outcome = await pending;
+    if (outcome && outcome.entry) {
+      const missHeaders = new Headers(outcome.entry.headers);
+      missHeaders.set('x-eo-edge-cache', 'MISS-EDGE');
+      return new Response(outcome.entry.body, {
+        status: 200,
+        headers: missHeaders,
+      });
+    }
+    if (outcome && outcome.passthrough) {
+      return outcome.passthrough;
+    }
+  } catch (_) {
+    // fall through to direct origin fetch on any unexpected error
+  }
+  return await fetchFn(request);
+}
+`;
+
+  if (!code.includes(edgeCacheMarker)) {
+    code = `${edgeCacheHelper}\n${code}`;
+  }
+  const originFetchTarget = 'const originResponse = await fetch(request);';
+  const originFetchReplacement =
+    'const originResponse = await __edgeoneOriginFetchWithCache(request, typeof urlInfo !== "undefined" ? urlInfo : null, fetch, typeof middlewareResponseHeaders !== "undefined" ? middlewareResponseHeaders : null);';
+  if (code.includes(originFetchTarget)) {
+    code = code.replaceAll(originFetchTarget, originFetchReplacement);
+  }
+  const adminInvalidateTarget = 'const pathname = url.pathname;';
+  const adminInvalidateMarker = '/* edgeone-admin-cache-invalidate */';
+  if (!code.includes(adminInvalidateMarker) && code.includes(adminInvalidateTarget)) {
+    code = code.replace(
+      adminInvalidateTarget,
+      `${adminInvalidateTarget}\n  ${adminInvalidateMarker}\n  if (request && request.method && request.method.toUpperCase() !== 'GET' && request.method.toUpperCase() !== 'HEAD' && pathname.startsWith('/api/admin')) {\n    if (typeof __edgeoneInvalidatePublicCache === 'function') __edgeoneInvalidatePublicCache();\n  }`
+    );
+  }
+
   writeFileSync(edgeFunctionPath, code);
-  console.log('[edgeone-build] Patched edge function process.env injection');
+  console.log('[edgeone-build] Patched edge function process.env injection & public API cache');
 }
 
 /**
@@ -551,6 +719,7 @@ function patchSsrNodeRoutes() {
  */
 function patchHandlerFile(handlerPath, code) {
   const marker = '/* edgeone-api-status-guard */';
+  const ssrCacheMarker = '/* edgeone-ssr-public-cache */';
   if (code.includes(marker)) {
     console.log('[edgeone-build] ssr-node handler status guard already present');
     return;
@@ -558,6 +727,8 @@ function patchHandlerFile(handlerPath, code) {
 
   const guard = `
 ${marker}
+${ssrCacheMarker}
+const __EO_SSR_PUBLIC_CACHE_TTL_MS = 60000;
 function __edgeoneEnsureResponseStatus(response, fallbackStatus) {
   if (!response) return response;
   try {
@@ -582,6 +753,79 @@ function __edgeoneEnsureResponseStatus(response, fallbackStatus) {
 function __edgeoneWrapHandler(fn) {
   if (typeof fn !== 'function') return fn;
   return async function __edgeonePatchedHandler(request, context) {
+    try {
+      const rawUrl = (request && request.url) || '';
+      const method = ((request && request.method) || 'GET').toUpperCase();
+      const pathname = rawUrl ? new URL(rawUrl, 'http://localhost').pathname : '';
+      if (method !== 'GET' && method !== 'HEAD') {
+        if (pathname.startsWith('/api/admin')) {
+          globalThis.__moontvSsrPublicCache = null;
+          globalThis.__moontvSsrPublicInflight = null;
+        }
+      } else if (pathname === '/api/theme/css' || pathname === '/api/server-config') {
+        const now = Date.now();
+        const cache =
+          globalThis.__moontvSsrPublicCache ||
+          (globalThis.__moontvSsrPublicCache = new Map());
+        const cached = cache.get(pathname);
+        if (cached && now - cached.cachedAt < __EO_SSR_PUBLIC_CACHE_TTL_MS) {
+          const hitHeaders = new Headers(cached.headers);
+          hitHeaders.set('x-eo-ssr-cache', 'HIT-SSR');
+          return new Response(method === 'HEAD' ? null : cached.body, {
+            status: 200,
+            headers: hitHeaders,
+          });
+        }
+        if (method === 'GET') {
+          const inflight =
+            globalThis.__moontvSsrPublicInflight ||
+            (globalThis.__moontvSsrPublicInflight = new Map());
+          let pending = inflight.get(pathname);
+          if (!pending) {
+            pending = (async () => {
+              const rawRes = __edgeoneEnsureResponseStatus(await fn(request, context), 200);
+              if (!rawRes || rawRes.status !== 200 || (rawRes.headers && rawRes.headers.get && rawRes.headers.get('set-cookie'))) {
+                return { passthrough: rawRes };
+              }
+              const bodyText = await rawRes.text();
+              const storedHeaders = [];
+              for (const k of ['content-type', 'etag', 'vary', 'x-powered-by']) {
+                const v = rawRes.headers.get(k);
+                if (v) storedHeaders.push([k, v]);
+              }
+              storedHeaders.push(['cache-control', 'no-cache']);
+              const entry = {
+                body: bodyText,
+                headers: storedHeaders,
+                cachedAt: Date.now(),
+              };
+              cache.set(pathname, entry);
+              return { entry };
+            })();
+            inflight.set(pathname, pending);
+            pending.finally(() => {
+              if (inflight.get(pathname) === pending) {
+                inflight.delete(pathname);
+              }
+            }).catch(() => {});
+          }
+          const outcome = await pending;
+          if (outcome && outcome.entry) {
+            const missHeaders = new Headers(outcome.entry.headers);
+            missHeaders.set('x-eo-ssr-cache', 'MISS-SSR');
+            return new Response(outcome.entry.body, {
+              status: 200,
+              headers: missHeaders,
+            });
+          }
+          if (outcome && outcome.passthrough) {
+            return outcome.passthrough;
+          }
+        }
+      }
+    } catch (_) {
+      // fall through to standard handler
+    }
     const response = await fn(request, context);
     return __edgeoneEnsureResponseStatus(response, 200);
   };
@@ -663,6 +907,7 @@ child.on('exit', (code, signal) => {
       copyFileSync(join(process.cwd(), file), join(process.cwd(), '.edgeone', file));
     }
 
+    patchEdgeOneOutputHeaders();
     patchEdgeFunctionEnvInjection();
     patchEdgeFunctionMiddlewareConfig();
     patchSsrNodeRoutes();
