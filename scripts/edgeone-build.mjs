@@ -1120,7 +1120,7 @@ function patchEdgeOneCliForGithubDeploy(cliPath) {
 
   const interceptor = `/* moontv-github-deploy-interceptor */
 if (process.argv.includes('deploy') && process.env.GITHUB_ACTIONS === 'true' && process.env.EDGEONE_API_TOKEN) {
-  await (async () => {
+  (async () => {
     try {
       const token = process.env.EDGEONE_API_TOKEN;
       const nIdx = process.argv.indexOf('-n');
@@ -1138,7 +1138,7 @@ if (process.argv.includes('deploy') && process.env.GITHUB_ACTIONS === 'true' && 
       };
       const projRes = await apiCall({ Action: 'DescribePagesProjects', PageNumber: 1, PageSize: 50 });
       const projects = projRes?.Data?.Response?.Projects || [];
-      const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const norm = (str) => String(str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
       const project = projects.find((p) => p.Name === reqName || p.ProjectId === reqName) ||
                       projects.find((p) => norm(p.Name) === norm(reqName) || norm(p.RepoName) === norm(reqName));
       if (project && project.Provider === 'Github') {
@@ -1149,7 +1149,7 @@ if (process.argv.includes('deploy') && process.env.GITHUB_ACTIONS === 'true' && 
         let deploymentId = '';
         const listRes = await apiCall({ Action: 'DescribePagesDeployments', ProjectId: projectId, PageNumber: 1, PageSize: 10 });
         const existing = (listRes?.Data?.Response?.Deployments || []).find(
-          (d) => d.Env === 'Production' && d.RepoCommitHash === repoCommit && (d.Status === 'Building' || d.Status === 'Pending' || d.Status === 'Success')
+          (d) => d.Env === 'Production' && d.RepoCommitHash === repoCommit && (d.Status === 'Process' || d.Status === 'Building' || d.Status === 'Pending' || d.Status === 'Success')
         );
         if (existing) {
           deploymentId = existing.DeploymentId;
@@ -1188,12 +1188,9 @@ if (process.argv.includes('deploy') && process.env.GITHUB_ACTIONS === 'true' && 
               console.log('PreviewUrl: ' + deployUrl);
               console.log('EDGEONE_DEPLOY_URL=' + deployUrl);
               console.log('EDGEONE_PROJECT_ID=' + projectId);
-              if (process.env.GITHUB_OUTPUT) {
-                fs.appendFileSync(process.env.GITHUB_OUTPUT, 'deploy_url=' + deployUrl + '\nproject_id=' + projectId + '\n');
-              }
               process.exit(0);
             }
-            if (d.Status === 'Failed' || d.Status === 'Canceled') {
+            if (d.Status === 'Failed' || d.Status === 'Canceled' || d.Status === 'Invalid') {
               console.error('[edgeone-github-deploy] Deployment failed:', JSON.stringify(d));
               process.exit(1);
             }
@@ -1204,15 +1201,17 @@ if (process.argv.includes('deploy') && process.env.GITHUB_ACTIONS === 'true' && 
         process.exit(1);
       }
     } catch (err) {
-      console.warn('[edgeone-github-deploy] Fallback to standard CLI due to error:', err?.message || err);
+      console.error('[edgeone-github-deploy] Error:', err?.message || err);
+      process.exit(1);
     }
   })();
+  return;
 }
 `;
 
   const updated = raw.startsWith('#!')
-    ? raw.replace(/^#!.*\n/, (m) => m + interceptor + '\n')
-    : interceptor + '\n' + raw;
+    ? raw.replace(/^#!.*\n/, (m) => m + '(function(){' + interceptor + '})();\n')
+    : '(function(){' + interceptor + '})();\n' + raw;
   fs.writeFileSync(cliPath, updated, 'utf8');
   return true;
 }
