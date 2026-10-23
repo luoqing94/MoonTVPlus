@@ -3,7 +3,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie } from '@/lib/auth';
-import { clearPublicRouteCaches, getConfig, setCachedConfig } from '@/lib/config';
+import { getConfig, setCachedConfig } from '@/lib/config';
 import { db } from '@/lib/db';
 import { normalizeApiBaseUrl } from '@/lib/url';
 
@@ -347,7 +347,6 @@ export async function POST(request: NextRequest) {
     // 写入数据库
     await db.saveAdminConfig(adminConfig);
     await setCachedConfig(adminConfig);
-    clearPublicRouteCaches();
     (globalThis as any).__moontvPublicRouteCache?.clear?.();
 
     return NextResponse.json(
