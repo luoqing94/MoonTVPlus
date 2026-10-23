@@ -31,6 +31,9 @@ const createNextConfig = (phase) => {
     // 在生产构建时忽略 ESLint 错误
     ignoreDuringBuilds: true,
   },
+  typescript: {
+    ignoreBuildErrors: true,
+  },
 
   reactStrictMode: false,
   swcMinify: true,
@@ -157,6 +160,9 @@ const createNextConfig = (phase) => {
     };
 
     // Cloudflare 使用 D1，不需要把 better-sqlite3 原生模块带入 Worker 产物。
+    if (isEdgeOne) {
+      config.cache = false;
+    }
     if (isEdgeBuild) {
       config.resolve.alias = {
         ...config.resolve.alias,

@@ -1,84 +1,10 @@
 {
-  "buildCommand": "pnpm run build:edgeone",
-  "installCommand": "pnpm install --no-frozen-lockfile",
+  "$schema": "https://edgeone.ai/schema/edgeone.json",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "pnpm edgeone:build",
   "outputDirectory": ".edgeone",
+  "nodeVersion": "24",
   "cloudFunctions": {
     "maxDuration": 120
-  },
-  "headers": [
-    {
-      "source": "/_next/static/*",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=31536000, immutable"
-        }
-      ]
-    },
-    {
-      "source": "/icons/*",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=604800, stale-while-revalidate=86400"
-        }
-      ]
-    },
-    {
-      "source": "/api/theme/css",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=0, s-maxage=60, stale-while-revalidate=300"
-        },
-        {
-          "key": "CDN-Cache-Control",
-          "value": "public, s-maxage=60, stale-while-revalidate=300"
-        }
-      ]
-    },
-    {
-      "source": "/api/server-config",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=0, s-maxage=60, stale-while-revalidate=300"
-        },
-        {
-          "key": "CDN-Cache-Control",
-          "value": "public, s-maxage=60, stale-while-revalidate=300"
-        }
-      ]
-    }
-  ],
-  "caches": [
-    {
-      "source": "/_next/static/*",
-      "cacheTtl": 31536000
-    },
-    {
-      "source": "/icons/*",
-      "cacheTtl": 604800
-    },
-    {
-      "source": "/logo.png",
-      "cacheTtl": 604800
-    },
-    {
-      "source": "/favicon.ico",
-      "cacheTtl": 86400
-    },
-    {
-      "source": "/manifest.json",
-      "cacheTtl": 86400
-    },
-    {
-      "source": "/api/theme/css",
-      "cacheTtl": 60
-    },
-    {
-      "source": "/api/server-config",
-      "cacheTtl": 60
-    }
-  ]
+  }
 }

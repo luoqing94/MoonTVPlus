@@ -1,16 +1,15 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import fs from 'node:fs';
-import path, { join } from 'node:path';
+import { copyFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 function loadLocalEnvFile() {
-  for (const fileName of ['.env.production', '.env']) {
-    const envPath = join(process.cwd(), fileName);
-    if (!existsSync(envPath)) {
-      continue;
-    }
-    const content = readFileSync(envPath, 'utf8');
+  const envPath = join(process.cwd(), '.env');
+  if (!existsSync(envPath)) {
+    return;
+  }
+
+  const content = readFileSync(envPath, 'utf8');
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith('#')) {
@@ -32,41 +31,10 @@ function loadLocalEnvFile() {
     }
 
     process.env[match[1]] = value;
-    }
   }
 }
 
 loadLocalEnvFile();
-
-let createdTempEnvProduction = false;
-const prodEnvFile = join(process.cwd(), '.env.production');
-if (!existsSync(prodEnvFile) && process.env.NEXT_PUBLIC_STORAGE_TYPE) {
-  const prodKeys = [
-    'USERNAME',
-    'PASSWORD',
-    'NEXT_PUBLIC_STORAGE_TYPE',
-    'UPSTASH_URL',
-    'UPSTASH_TOKEN',
-    'NEXT_PUBLIC_SITE_NAME',
-    'SITE_BASE',
-    'NEXT_PUBLIC_SEARCH_MAX_PAGE',
-    'NEXT_PUBLIC_DOUBAN_PROXY_TYPE',
-    'NEXT_PUBLIC_DOUBAN_IMAGE_PROXY_TYPE',
-    'CRON_WAIT_FOR_COMPLETION',
-    'WATCH_ROOM_ENABLED',
-  ];
-  const lines = [];
-  for (const k of prodKeys) {
-    const val = process.env[k] ?? (k === 'CRON_WAIT_FOR_COMPLETION' ? 'true' : undefined);
-    if (val !== undefined && val !== '') {
-      lines.push(`${k}=${val}`);
-    }
-  }
-  if (lines.length > 0) {
-    writeFileSync(prodEnvFile, `${lines.join('\n')}\n`);
-    createdTempEnvProduction = true;
-  }
-}
 
 const runtimeEnvKeys = [
   'USERNAME',
@@ -230,7 +198,7 @@ function resolveEdgeOneMiddlewareSkipPaths() {
       skipPaths.add(path);
     }
   }
-  for (const staticPublicPath of ['/.well-known', '/manifest.json', '/icons/', '/logo.png', '/robots.txt']) {
+  for (const staticPublicPath of ['/manifest.json', '/icons/', '/logo.png', '/robots.txt']) {
     skipPaths.add(staticPublicPath);
   }
 
@@ -532,10 +500,9 @@ async function __edgeoneOriginFetchWithCache(request, urlInfo, fetchFn, middlewa
           if (v) storedHeaders.push([k, v]);
         }
         storedHeaders.push(['cache-control', isPublicApi ? 'public, max-age=0, s-maxage=60, stale-while-revalidate=300' : 'no-cache']);
-                if (isPublicApi) {
-                  storedHeaders.push(['cdn-cache-control', 'public, s-maxage=60, stale-while-revalidate=300']);
-                  storedHeaders.push(['eo-cdn-cache-control', 'public, s-maxage=60, stale-while-revalidate=300, durable']);
-                }
+        if (isPublicApi) {
+          storedHeaders.push(['cdn-cache-control', 'public, s-maxage=60, stale-while-revalidate=300']);
+        }
         const entry = {
           body: bodyText,
           headers: storedHeaders,
@@ -830,10 +797,9 @@ function __edgeoneWrapHandler(fn) {
                 if (v) storedHeaders.push([k, v]);
               }
               storedHeaders.push(['cache-control', isPublicApi ? 'public, max-age=0, s-maxage=60, stale-while-revalidate=300' : 'no-cache']);
-                if (isPublicApi) {
-                  storedHeaders.push(['cdn-cache-control', 'public, s-maxage=60, stale-while-revalidate=300']);
-                  storedHeaders.push(['eo-cdn-cache-control', 'public, s-maxage=60, stale-while-revalidate=300, durable']);
-                }
+        if (isPublicApi) {
+          storedHeaders.push(['cdn-cache-control', 'public, s-maxage=60, stale-while-revalidate=300']);
+        }
               const entry = {
                 body: bodyText,
                 headers: storedHeaders,
@@ -925,398 +891,156 @@ function patchSsrNodeHandlerStatus() {
   console.warn('[edgeone-build] ssr-node handler not found, skip status patch');
 }
 
-function runPostBuildPatches() {
-  const edgeoneDir = join(process.cwd(), '.edgeone');
-  mkdirSync(edgeoneDir, { recursive: true });
-  for (const file of ['edgeone.json', 'package.json']) {
-    const src = join(process.cwd(), file);
-    if (existsSync(src)) {
-      copyFileSync(src, join(edgeoneDir, file));
-    }
-  }
 
-  patchEdgeOneOutputHeaders();
-  patchEdgeFunctionEnvInjection();
-  patchEdgeFunctionMiddlewareConfig();
-  patchSsrNodeRoutes();
-  patchSsrNodeHandlerStatus();
-
-  const prodEnvSrc = join(process.cwd(), '.env.production');
-  const prodEnvDst = join(edgeoneDir, 'cloud-functions', 'ssr-node', '.env.production');
-  if (existsSync(prodEnvSrc) && existsSync(join(edgeoneDir, 'cloud-functions', 'ssr-node'))) {
-    copyFileSync(prodEnvSrc, prodEnvDst);
-  }
-
-  for (const envPath of [
-    join(edgeoneDir, '.env'),
-    join(edgeoneDir, 'cloud-functions', 'ssr-node', '.env'),
-  ]) {
-    rmSync(envPath, { force: true });
-  }
-}
-
-
-function patchCompiledMiddlewareOutput() {
-  const candidates = [
-    path.join(process.cwd(), '.next', 'server', 'src', 'middleware.js'),
-    path.join(process.cwd(), '.next', 'standalone', '.next', 'server', 'src', 'middleware.js'),
-    path.join(process.cwd(), '.next', 'server', 'middleware.js'),
-    path.join(process.cwd(), '.next', 'standalone', '.next', 'server', 'middleware.js'),
-  ];
-
-  const snippet = `
-;/* moontv-edge-fetch-cache-v2 */
-(function() {
+function patchEdgeOneCliForGithubActions() {
+  if (process.env.GITHUB_ACTIONS !== "true") return;
   try {
-    var g = typeof globalThis !== 'undefined' ? globalThis : (typeof self !== 'undefined' ? self : this);
-    if (!g || g.__moontvEdgeFetchPatchedV2 || typeof g.fetch !== 'function') return;
-    g.__moontvEdgeFetchPatchedV2 = true;
-    var _origFetch = g.fetch.bind(g);
-    var __moontvEdgeCachedFetch = async function(input, init) {
-      var cleanInit = init;
-      if (cleanInit && typeof cleanInit === 'object' && 'eo' in cleanInit) {
-        var rest = {};
-        for (var k in cleanInit) {
-          if (k !== 'eo') rest[k] = cleanInit[k];
-        }
-        cleanInit = rest;
-      }
-      try {
-        var reqUrlStr = typeof input === 'string' ? input : (input && typeof input.url === 'string' ? input.url : '');
-        if (!reqUrlStr) return _origFetch(input, cleanInit);
-        var reqMethod = String((cleanInit && cleanInit.method) || (input && input.method) || 'GET').toUpperCase();
-        var u = new URL(reqUrlStr, 'http://localhost');
-        var p = u.pathname;
-        if (reqMethod !== 'GET' && reqMethod !== 'HEAD') {
-          if (p.indexOf('/api/admin') === 0) {
-            if (g.__moontvEdgePublicCache instanceof Map) g.__moontvEdgePublicCache.clear();
-            if (g.__moontvEdgePublicInflight instanceof Map) g.__moontvEdgePublicInflight.clear();
-          }
-          return _origFetch(input, cleanInit);
-        }
-        var isPublicApi = (p === '/api/theme/css' || p === '/api/server-config');
-        var isLoginHtml = (p === '/login');
-        if (!isPublicApi && !isLoginHtml) {
-          return _origFetch(input, cleanInit);
-        }
-        var hdrs = (cleanInit && cleanInit.headers) || (input && input.headers);
-        var getHdr = function(name) {
-          if (!hdrs) return '';
-          if (typeof hdrs.get === 'function') return hdrs.get(name) || '';
-          return hdrs[name] || hdrs[name.toLowerCase()] || '';
-        };
-        if (isLoginHtml) {
-          var cookieStr = getHdr('cookie');
-          var rscHdr = getHdr('rsc') || getHdr('next-router-state-tree');
-          if (rscHdr || u.searchParams.has('_rsc') || (cookieStr && (cookieStr.indexOf('auth=') !== -1 || cookieStr.indexOf('user_auth=') !== -1))) {
-            return _origFetch(input, cleanInit);
-          }
-        }
-        var cacheKey = reqMethod + ':' + p + (isLoginHtml ? (u.search || '') : '');
-        if (!(g.__moontvEdgePublicCache instanceof Map)) g.__moontvEdgePublicCache = new Map();
-        if (!(g.__moontvEdgePublicInflight instanceof Map)) g.__moontvEdgePublicInflight = new Map();
-        var now = Date.now();
-        var cached = g.__moontvEdgePublicCache.get(cacheKey);
-        if (cached && cached.expiresAt > now) {
-          var ch = new Headers(cached.headers);
-          ch.set('x-eo-edge-cache', 'HIT-EDGE');
-          if (isPublicApi) {
-            ch.set('cache-control', 'public, max-age=0, s-maxage=60, stale-while-revalidate=300');
-            ch.set('cdn-cache-control', 'public, s-maxage=60, stale-while-revalidate=300');
-            ch.set('eo-cdn-cache-control', 'public, s-maxage=60, stale-while-revalidate=300, durable');
-          }
-          return new Response(reqMethod === 'HEAD' ? null : cached.body.slice(0), {
-            status: cached.status,
-            headers: ch
-          });
-        }
-        var pending = g.__moontvEdgePublicInflight.get(cacheKey);
-        var wasCoalesced = Boolean(pending);
-        if (!pending) {
-          pending = (async function() {
-            var res = await _origFetch(input, cleanInit);
-            if (res && res.status === 200) {
-              var buf = await res.arrayBuffer();
-              var storedHeaders = [];
-              var hasCacheControl = false;
-              res.headers.forEach(function(v, k) {
-                var lk = k.toLowerCase();
-                if (lk === 'set-cookie' || lk === 'content-encoding' || lk === 'content-length' || lk === 'transfer-encoding') return;
-                if (lk === 'cache-control') {
-                  hasCacheControl = true;
-                  storedHeaders.push([k, isPublicApi ? 'public, max-age=0, s-maxage=60, stale-while-revalidate=300' : v]);
-                  return;
-                }
-                storedHeaders.push([k, v]);
-              });
-              if (!hasCacheControl) {
-                storedHeaders.push(['cache-control', isPublicApi ? 'public, max-age=0, s-maxage=60, stale-while-revalidate=300' : 'no-cache']);
-              }
-              var entry = {
-                status: res.status,
-                headers: storedHeaders,
-                body: buf,
-                expiresAt: Date.now() + 60000
-              };
-              g.__moontvEdgePublicCache.set(cacheKey, entry);
-              return { entry: entry, passthrough: null };
-            }
-            return { entry: null, passthrough: res };
-          })();
-          g.__moontvEdgePublicInflight.set(cacheKey, pending);
-        }
-        var out;
-        try {
-          out = await pending;
-        } finally {
-          if (!wasCoalesced) g.__moontvEdgePublicInflight.delete(cacheKey);
-        }
-        if (out && out.entry) {
-          var fh = new Headers(out.entry.headers);
-          fh.set('x-eo-edge-cache', wasCoalesced ? 'HIT-EDGE' : 'MISS-EDGE');
-          if (isPublicApi) {
-            fh.set('cache-control', 'public, max-age=0, s-maxage=60, stale-while-revalidate=300');
-            fh.set('cdn-cache-control', 'public, s-maxage=60, stale-while-revalidate=300');
-            fh.set('eo-cdn-cache-control', 'public, s-maxage=60, stale-while-revalidate=300, durable');
-          }
-          return new Response(reqMethod === 'HEAD' ? null : out.entry.body.slice(0), {
-            status: out.entry.status,
-            headers: fh
-          });
-        }
-        return out ? out.passthrough : _origFetch(input, cleanInit);
-      } catch (_err) {
-        return _origFetch(input, cleanInit);
-      }
-    };
-    try {
-      Object.defineProperty(g, 'fetch', {
-        configurable: true,
-        enumerable: true,
-        get: function() { return __moontvEdgeCachedFetch; },
-        set: function() {}
-      });
-    } catch (_) {
-      g.fetch = __moontvEdgeCachedFetch;
-    }
-  } catch (_) {}
-})();
-`;
-
-  for (const file of candidates) {
-    if (!fs.existsSync(file)) continue;
-    const raw = fs.readFileSync(file, 'utf8');
-    if (raw.includes('moontv-edge-fetch-cache-v2')) continue;
-    fs.writeFileSync(file, raw + '\n' + snippet, 'utf8');
-    console.log('[edgeone-build] Injected moontv-edge-fetch-cache-v2 into ' + path.relative(process.cwd(), file));
-  }
-}
-
-
-function patchEdgeOneCliForGithubDeploy(cliPath) {
-  if (!fs.existsSync(cliPath)) return false;
-  const raw = fs.readFileSync(cliPath, 'utf8');
-  if (raw.includes('/* moontv-github-deploy-interceptor */')) return false;
-
-  const interceptor = `/* moontv-github-deploy-interceptor */
-if (process.argv.includes('deploy') && process.env.GITHUB_ACTIONS === 'true' && process.env.EDGEONE_API_TOKEN) {
+    const cliPath = join(process.cwd(), "node_modules", "edgeone", "edgeone-dist", "cli.js");
+    if (!existsSync(cliPath)) return;
+    const raw = readFileSync(cliPath, "utf8");
+    if (raw.includes("/* moontv-github-deploy-interceptor */")) return;
+    const interceptor = `/* moontv-github-deploy-interceptor */
+if (process.argv.includes("deploy") && process.env.GITHUB_ACTIONS === "true" && process.env.EDGEONE_API_TOKEN) {
   (async () => {
     try {
       const token = process.env.EDGEONE_API_TOKEN;
-      const nIdx = process.argv.indexOf('-n');
-      const reqName = (nIdx !== -1 && process.argv[nIdx + 1]) ? process.argv[nIdx + 1] : (process.env.EDGEONE_PROJECT_NAME || 'moontvplus-edge');
+      const nIdx = process.argv.indexOf("-n");
+      const reqName = (nIdx !== -1 && process.argv[nIdx + 1]) ? process.argv[nIdx + 1] : (process.env.EDGEONE_PROJECT_NAME || "moontvplus-edge");
       const apiCall = async (body) => {
-        const res = await fetch('https://pages-api.cloud.tencent.com/v1', {
-          method: 'POST',
+        const res = await fetch("https://pages-api.cloud.tencent.com/v1", {
+          method: "POST",
           headers: {
-            'Authorization': 'Bearer ' + token,
-            'Content-Type': 'application/json',
+            "Authorization": "Bearer " + token,
+            "Content-Type": "application/json",
           },
           body: JSON.stringify(body),
         });
         return await res.json();
       };
-      const projRes = await apiCall({ Action: 'DescribePagesProjects', PageNumber: 1, PageSize: 50 });
+      const projRes = await apiCall({ Action: "DescribePagesProjects", PageNumber: 1, PageSize: 50 });
       const projects = projRes?.Data?.Response?.Projects || [];
-      const norm = (str) => String(str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      const norm = (str) => String(str || "").toLowerCase().replace(/[^a-z0-9]/g, "");
       const project = projects.find((p) => p.Name === reqName || p.ProjectId === reqName) ||
                       projects.find((p) => norm(p.Name) === norm(reqName) || norm(p.RepoName) === norm(reqName));
-      if (project && project.Provider === 'Github') {
+      if (project && project.Provider === "Github") {
         const projectId = project.ProjectId;
-        const repoBranch = process.env.GITHUB_REF_NAME || 'custom/live';
-        const repoCommit = process.env.GITHUB_SHA || '';
-        console.log('[edgeone-github-deploy] Matched GitHub-linked project: ' + project.Name + ' (' + projectId + ')');
-        let deploymentId = '';
-        const listRes = await apiCall({ Action: 'DescribePagesDeployments', ProjectId: projectId, PageNumber: 1, PageSize: 10 });
+        const repoBranch = process.env.GITHUB_REF_NAME || "custom/live";
+        const repoCommit = process.env.GITHUB_SHA || "";
+        console.log("[edgeone-github-deploy] Matched GitHub-linked project: " + project.Name + " (" + projectId + ")");
+        let deploymentId = "";
+        const listRes = await apiCall({ Action: "DescribePagesDeployments", ProjectId: projectId, PageNumber: 1, PageSize: 10 });
         const existing = (listRes?.Data?.Response?.Deployments || []).find(
-          (d) => d.Env === 'Production' && d.RepoCommitHash === repoCommit && (d.Status === 'Process' || d.Status === 'Building' || d.Status === 'Pending' || d.Status === 'Success')
+          (d) => d.Env === "Production" && d.RepoCommitHash === repoCommit && (d.Status === "Process" || d.Status === "Building" || d.Status === "Pending" || d.Status === "Success")
         );
         if (existing) {
           deploymentId = existing.DeploymentId;
-          console.log('[edgeone-github-deploy] Reusing existing Production deployment: ' + deploymentId + ' (Status: ' + existing.Status + ')');
+          console.log("[edgeone-github-deploy] Reusing existing Production deployment: " + deploymentId + " (Status: " + existing.Status + ")");
         } else {
           const createBody = {
-            Action: 'CreatePagesDeployment',
+            Action: "CreatePagesDeployment",
             ProjectId: projectId,
-            ViaMeta: 'Github',
-            Provider: 'Github',
-            Env: 'Production',
+            ViaMeta: "Github",
+            Provider: "Github",
+            Env: "Production",
             RepoBranch: repoBranch,
           };
           if (repoCommit && repoCommit.length === 40) {
             createBody.RepoCommitHash = repoCommit;
           }
           const createRes = await apiCall(createBody);
-          deploymentId = createRes?.Data?.Response?.DeploymentId || '';
+          deploymentId = createRes?.Data?.Response?.DeploymentId || "";
           if (!deploymentId) {
-            console.error('[edgeone-github-deploy] CreatePagesDeployment failed:', JSON.stringify(createRes));
+            console.error("[edgeone-github-deploy] CreatePagesDeployment failed:", JSON.stringify(createRes));
             process.exit(1);
           }
-          console.log('[edgeone-github-deploy] Triggered Production Cloud Builder deployment: ' + deploymentId);
+          console.log("[edgeone-github-deploy] Triggered Production Cloud Builder deployment: " + deploymentId);
         }
         const deadline = Date.now() + 10 * 60 * 1000;
         while (Date.now() < deadline) {
-          const pollRes = await apiCall({ Action: 'DescribePagesDeployments', ProjectId: projectId, PageNumber: 1, PageSize: 10 });
+          const pollRes = await apiCall({ Action: "DescribePagesDeployments", ProjectId: projectId, PageNumber: 1, PageSize: 10 });
           const d = (pollRes?.Data?.Response?.Deployments || []).find((x) => x.DeploymentId === deploymentId);
           if (d) {
-            console.log('[edgeone-github-deploy] Deployment ' + deploymentId + ' status: ' + d.Status);
-            if (d.Status === 'Success') {
+            console.log("[edgeone-github-deploy] Deployment " + deploymentId + " status: " + d.Status);
+            if (d.Status === "Success") {
               const customDomain = project.CustomDomains?.[0]?.Domain;
-              const deployUrl = customDomain ? ('https://' + customDomain + '/') : ('https://' + project.Name + '.edgeone.run/');
-              console.log('Deployment complete!');
-              console.log('ProjectId: ' + projectId);
-              console.log('PreviewUrl: ' + deployUrl);
-              console.log('EDGEONE_DEPLOY_URL=' + deployUrl);
-              console.log('EDGEONE_PROJECT_ID=' + projectId);
+              const deployUrl = customDomain ? ("https://" + customDomain + "/") : ("https://" + project.Name + ".edgeone.run/");
+              console.log("Deployment complete!");
+              console.log("ProjectId: " + projectId);
+              console.log("PreviewUrl: " + deployUrl);
+              console.log("EDGEONE_DEPLOY_URL=" + deployUrl);
+              console.log("EDGEONE_PROJECT_ID=" + projectId);
               process.exit(0);
             }
-            if (d.Status === 'Failed' || d.Status === 'Canceled' || d.Status === 'Invalid') {
-              console.error('[edgeone-github-deploy] Deployment failed:', JSON.stringify(d));
+            if (d.Status === "Failed" || d.Status === "Canceled" || d.Status === "Invalid") {
+              console.error("[edgeone-github-deploy] Deployment failed:", JSON.stringify(d));
               process.exit(1);
             }
           }
           await new Promise((r) => setTimeout(r, 5000));
         }
-        console.error('[edgeone-github-deploy] Timed out waiting for deployment ' + deploymentId);
+        console.error("[edgeone-github-deploy] Timed out waiting for deployment " + deploymentId);
         process.exit(1);
       }
     } catch (err) {
-      console.error('[edgeone-github-deploy] Error:', err?.message || err);
+      console.error("[edgeone-github-deploy] Error:", err?.message || err);
       process.exit(1);
     }
   })();
   return;
 }
 `;
-
-  const updated = raw.startsWith('#!')
-    ? raw.replace(/^#!.*\n/, (m) => m + interceptor + '\n')
-    : interceptor + '\n' + raw;
-  fs.writeFileSync(cliPath, updated, 'utf8');
-  return true;
-}
-
-function patchEdgeOneCli() {
-  try {
-    const cliPath = join(process.cwd(), 'node_modules', 'edgeone', 'edgeone-dist', 'cli.js');
-    if (!existsSync(cliPath)) return;
-    patchEdgeOneCliForGithubDeploy(cliPath);
-    let cliCode = readFileSync(cliPath, 'utf8');
-    let changed = false;
-    const cliTarget = 'vs(`Console URL: ${S}`)';
-    if (cliCode.includes(cliTarget) && !cliCode.includes('EDGEONE_DEPLOY_URL=')) {
-      cliCode = cliCode.replace(
-        cliTarget,
-        `${cliTarget},console.log(\`EDGEONE_DEPLOY_URL=\${b.url}\\nEDGEONE_PROJECT_ID=\${b.projectId}\`)`
-      );
-      changed = true;
-    }
-    if (cliCode.includes('.Provider!=="Upload"')) {
-      cliCode = cliCode.replaceAll('.Provider!=="Upload"', '.Provider==="NEVER_BLOCK"');
-      changed = true;
-    }
-    if (cliCode.includes('.Provider !== "Upload"')) {
-      cliCode = cliCode.replaceAll('.Provider !== "Upload"', '.Provider === "NEVER_BLOCK"');
-      changed = true;
-    }
-    if (changed) {
-      writeFileSync(cliPath, cliCode);
-      console.log('[edgeone-build] Patched local edgeone CLI for GitHub-linked project deploy');
-    }
+    const updated = raw.startsWith("#!")
+      ? raw.replace(/^#!.*\n/, (m) => m + interceptor + "\n")
+      : interceptor + "\n" + raw;
+    writeFileSync(cliPath, updated, "utf8");
+    console.log("[edgeone-build] Patched local edgeone CLI for GitHub Actions deploy");
   } catch {
-    // ignore optional CLI patch
+    // ignore
   }
 }
 
-if (process.argv.includes('--post-opennext-patch')) {
-  const start = Date.now();
-  const efPath = join(process.cwd(), '.edgeone', 'edge-functions', 'index.js');
-  const ssrPath = join(process.cwd(), '.edgeone', 'cloud-functions', 'ssr-node', 'handler.js');
-  const timer = setInterval(() => {
-    const efReady =
-      existsSync(efPath) && !readFileSync(efPath, 'utf8').includes("'__MIDDLEWARE_BUNDLE_CODE__'");
-    const ssrReady = existsSync(ssrPath);
-    if (efReady && ssrReady) {
-      clearInterval(timer);
-      try {
-        runPostBuildPatches();
-      } catch {
-        // ignore
-      }
-      process.exit(0);
-    }
-    if (Date.now() - start > 30000) {
-      clearInterval(timer);
-      process.exit(0);
-    }
-  }, 50);
-} else {
-  patchEdgeOneCli();
+patchEdgeOneCliForGithubActions();
 
-  const isInsideEdgeOneBuilder = process.env.NEXT_PRIVATE_STANDALONE === 'true';
+const isInsideEdgeOneBuilder = process.env.NEXT_PRIVATE_STANDALONE === 'true';
 
-  const command = isInsideEdgeOneBuilder
-    ? 'BUILD_TARGET=edgeone EDGEONE_PAGES=1 pnpm build'
-    : 'BUILD_TARGET=edgeone EDGEONE_PAGES=1 edgeone makers build';
+const command = isInsideEdgeOneBuilder
+  ? 'BUILD_TARGET=edgeone EDGEONE_PAGES=1 pnpm build'
+  : 'BUILD_TARGET=edgeone EDGEONE_PAGES=1 edgeone makers build';
 
-  const child = spawn(command, {
-    stdio: 'inherit',
-    shell: true,
-    env: {
-      ...process.env,
-      BUILD_TARGET: 'edgeone',
-      EDGEONE_PAGES: '1',
-    },
-  });
+const child = spawn(command, {
+  stdio: 'inherit',
+  shell: true,
+  env: {
+    ...process.env,
+    BUILD_TARGET: 'edgeone',
+    EDGEONE_PAGES: '1',
+  },
+});
 
-  child.on('exit', (code, signal) => {
-    if (!signal && code === 0) {
-      if (isInsideEdgeOneBuilder) {
-        try { injectEdgeMiddlewareFetchCache(); } catch {}
-        try {
-          const watcher = spawn(process.execPath, [process.argv[1], '--post-opennext-patch'], {
-            detached: true,
-            stdio: 'ignore',
-            env: process.env,
-          });
-          watcher.unref();
-        } catch {
-          // ignore
-        }
-      } else {
-        runPostBuildPatches();
-        patchEdgeOneCli();
-        const prodEnvSrc = join(process.cwd(), '.env.production');
-        if (createdTempEnvProduction) {
-          rmSync(prodEnvSrc, { force: true });
-        }
-      }
+child.on('exit', (code, signal) => {
+  if (!signal && code === 0) {
+    for (const file of ['edgeone.json', 'package.json']) {
+      copyFileSync(join(process.cwd(), file), join(process.cwd(), '.edgeone', file));
     }
 
-    if (signal) {
-      process.kill(process.pid, signal);
-      return;
+    patchEdgeOneOutputHeaders();
+    patchEdgeFunctionEnvInjection();
+    patchEdgeFunctionMiddlewareConfig();
+    patchSsrNodeRoutes();
+    patchSsrNodeHandlerStatus();
+    patchEdgeOneCliForGithubActions();
+
+    for (const envPath of [
+      join(process.cwd(), '.edgeone', '.env'),
+      join(process.cwd(), '.edgeone', 'cloud-functions', 'ssr-node', '.env'),
+    ]) {
+      rmSync(envPath, { force: true });
     }
-    process.exit(code ?? 1);
-  });
-}
+  }
+
+  if (signal) {
+    process.kill(process.pid, signal);
+    return;
+  }
+  process.exit(code ?? 1);
+});
