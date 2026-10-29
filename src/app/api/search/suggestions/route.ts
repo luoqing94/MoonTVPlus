@@ -64,7 +64,8 @@ async function generateSuggestions(config: AdminConfig, query: string, username:
   if (apiSites.length > 0) {
     // 取第一个可用的数据源进行搜索
     const firstSite = apiSites[0];
-    const results = await searchFromApi(firstSite, query);
+    const outcome = await searchFromApi(firstSite, query, { maxPages: 1 });
+    const results = Array.isArray(outcome?.results) ? outcome.results : [];
 
     realKeywords = Array.from(
       new Set(

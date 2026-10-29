@@ -140,6 +140,14 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
   const eventSourceRef = useRef<EventSource | null>(null);
   const [totalSources, setTotalSources] = useState(0);
   const [completedSources, setCompletedSources] = useState(0);
+  // Per-source CMS pagination (for 「加载更多」)
+  const sourcePageMetaRef = useRef<
+    Map<string, { page: number; pageCount: number; hasMore: boolean }>
+  >(new Map());
+  const [hasMorePages, setHasMorePages] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [searchMaxPages, setSearchMaxPages] = useState(1);
+  const loadMoreAbortRef = useRef<AbortController | null>(null);
   const pendingResultsRef = useRef<SearchResult[]>([]);
   const flushTimerRef = useRef<number | null>(null);
   const [useFluidSearch, setUseFluidSearch] = useState(true);
@@ -1548,6 +1556,9 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
           setShowResults(true);
           setTotalSources(1);
           setCompletedSources(1);
+          sourcePageMetaRef.current = new Map();
+          setHasMorePages(false);
+          setIsLoadingMore(false);
           setShowSuggestions(false);
           setIsFromCache(true); // 标记为缓存结果
           // 保存到搜索历史
@@ -1578,6 +1589,15 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
       setSearchResults([]);
       setTotalSources(0);
       setCompletedSources(0);
+      sourcePageMetaRef.current = new Map();
+      setHasMorePages(false);
+      setIsLoadingMore(false);
+      if (loadMoreAbortRef.current) {
+        try {
+          loadMoreAbortRef.current.abort();
+        } catch {}
+        loadMoreAbortRef.current = null;
+      }
       // 清理缓冲
       pendingResultsRef.current = [];
       if (flushTimerRef.current) {
@@ -1620,9 +1640,27 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
               case 'start':
                 setTotalSources(payload.totalSources || 0);
                 setCompletedSources(0);
+                if (typeof payload.maxPages === 'number' && payload.maxPages > 0) {
+                  setSearchMaxPages(payload.maxPages);
+                }
                 break;
               case 'source_result': {
                 setCompletedSources((prev) => prev + 1);
+                if (payload.source) {
+                  const page = Number(payload.page) || 1;
+                  const pageCount = Number(payload.pageCount) || page;
+                  const hasMore = Boolean(payload.hasMore);
+                  sourcePageMetaRef.current.set(String(payload.source), {
+                    page,
+                    pageCount,
+                    hasMore,
+                  });
+                  setHasMorePages(
+                    Array.from(sourcePageMetaRef.current.values()).some(
+                      (m) => m.hasMore
+                    )
+                  );
+                }
                 if (
                   Array.isArray(payload.results) &&
                   payload.results.length > 0
@@ -1652,6 +1690,18 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
               }
               case 'source_error':
                 setCompletedSources((prev) => prev + 1);
+                if (payload.source) {
+                  sourcePageMetaRef.current.set(String(payload.source), {
+                    page: Number(payload.page) || 0,
+                    pageCount: Number(payload.pageCount) || 0,
+                    hasMore: false,
+                  });
+                  setHasMorePages(
+                    Array.from(sourcePageMetaRef.current.values()).some(
+                      (m) => m.hasMore
+                    )
+                  );
+                }
                 break;
               case 'complete':
                 setCompletedSources(payload.completedSources || totalSources);
@@ -1825,6 +1875,12 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
         } catch {}
         eventSourceRef.current = null;
       }
+      if (loadMoreAbortRef.current) {
+        try {
+          loadMoreAbortRef.current.abort();
+        } catch {}
+        loadMoreAbortRef.current = null;
+      }
       if (flushTimerRef.current) {
         clearTimeout(flushTimerRef.current);
         flushTimerRef.current = null;
@@ -1832,6 +1888,95 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
       pendingResultsRef.current = [];
     };
   }, []);
+
+  const handleLoadMore = async () => {
+    const trimmed = currentQueryRef.current.trim();
+    if (!trimmed || isLoading || isLoadingMore) return;
+
+    const nextSources = Array.from(sourcePageMetaRef.current.entries())
+      .filter(([, meta]) => meta.hasMore)
+      .map(([key, meta]) => ({ key, page: meta.page + 1 }))
+      .filter((s) => s.page <= searchMaxPages);
+
+    if (nextSources.length === 0) {
+      setHasMorePages(false);
+      return;
+    }
+
+    if (loadMoreAbortRef.current) {
+      try {
+        loadMoreAbortRef.current.abort();
+      } catch {}
+    }
+    const abort = new AbortController();
+    loadMoreAbortRef.current = abort;
+    setIsLoadingMore(true);
+
+    try {
+      const res = await fetch(appendSpecialSourceParam('/api/search/more'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: abort.signal,
+        body: JSON.stringify({
+          q: trimmed,
+          sources: nextSources,
+          special: isSpecialSourceContext() ? true : undefined,
+          privateOnly: privateLibraryOnly || undefined,
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`load more failed: ${res.status}`);
+      }
+      const data = await res.json();
+      if (currentQueryRef.current !== trimmed) return;
+
+      if (Array.isArray(data.sources)) {
+        for (const src of data.sources) {
+          if (!src?.key) continue;
+          sourcePageMetaRef.current.set(String(src.key), {
+            page: Number(src.page) || nextSources.find((s) => s.key === src.key)?.page || 1,
+            pageCount: Number(src.pageCount) || 1,
+            hasMore: Boolean(src.hasMore),
+          });
+        }
+        setHasMorePages(
+          Array.from(sourcePageMetaRef.current.values()).some((m) => m.hasMore)
+        );
+      } else {
+        setHasMorePages(Boolean(data.hasMore));
+      }
+
+      if (Array.isArray(data.results) && data.results.length > 0) {
+        const activeYearOrder =
+          viewMode === 'agg' ? filterAgg.yearOrder : filterAll.yearOrder;
+        const incoming: SearchResult[] =
+          activeYearOrder === 'none'
+            ? sortBatchForNoOrder(data.results as SearchResult[])
+            : (data.results as SearchResult[]);
+
+        startTransition(() => {
+          setSearchResults((prev) => {
+            // Deduplicate by source+id when appending
+            const seen = new Set(prev.map((r) => `${r.source}::${r.id}`));
+            const unique = incoming.filter(
+              (r) => !seen.has(`${r.source}::${r.id}`)
+            );
+            const merged = prev.concat(unique);
+            setCachedResults(trimmed, merged);
+            return merged;
+          });
+        });
+      }
+    } catch (error: any) {
+      if (error?.name === 'AbortError') return;
+      console.warn('加载更多失败:', error);
+    } finally {
+      if (loadMoreAbortRef.current === abort) {
+        loadMoreAbortRef.current = null;
+      }
+      setIsLoadingMore(false);
+    }
+  };
 
   // 输入框内容变化时触发，显示搜索建议
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2805,6 +2950,30 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                         </div>
                       );
                     })()
+                  )}
+                  {!isLoading &&
+                    !isFromCache &&
+                    useFluidSearch &&
+                    searchResults.length > 0 && (
+                    <div className='mt-10 flex justify-center'>
+                      {hasMorePages ? (
+                        <button
+                          type='button'
+                          onClick={handleLoadMore}
+                          disabled={isLoadingMore}
+                          className='inline-flex items-center gap-2 rounded-full border border-green-500/40 bg-green-50 px-6 py-2.5 text-sm font-medium text-green-700 transition-colors hover:bg-green-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-green-400/30 dark:bg-green-900/20 dark:text-green-300 dark:hover:bg-green-900/40'
+                        >
+                          {isLoadingMore && (
+                            <span className='inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-green-300 border-t-green-600 dark:border-green-700 dark:border-t-green-300'></span>
+                          )}
+                          {isLoadingMore ? '加载中…' : '加载更多'}
+                        </button>
+                      ) : (
+                        <span className='text-sm text-gray-400 dark:text-gray-500'>
+                          没有更多了
+                        </span>
+                      )}
+                    </div>
                   )}
                 </>
               ) : activeTab === 'pansou' ? (

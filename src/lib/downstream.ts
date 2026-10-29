@@ -19,6 +19,83 @@ interface ApiSearchItem {
   vod_total?: number;
 }
 
+export type SearchFromApiOptions = {
+  /** Cancels in-flight fetch + body parse when aborted (timeout or client disconnect). */
+  signal?: AbortSignal;
+  /** First CMS page to fetch (1-based). Default 1. */
+  startPage?: number;
+  /** How many pages to fetch in this call. Default = SiteConfig.SearchDownstreamMaxPage. */
+  maxPages?: number;
+};
+
+export type SearchFromApiOutcome = {
+  results: SearchResult[];
+  /** Highest page number fetched in this call. */
+  page: number;
+  /** Total pages reported by the CMS (best effort). */
+  pageCount: number;
+  /** True when more pages remain under the admin absolute cap. */
+  hasMore: boolean;
+};
+
+function isAbortError(error: any): boolean {
+  return (
+    error?.name === 'AbortError' ||
+    error?.code === 20 ||
+    (typeof error?.message === 'string' &&
+      (error.message.includes('aborted') || error.message.includes('Abort')))
+  );
+}
+
+function abortError(): Error {
+  const err = new Error('The operation was aborted.');
+  err.name = 'AbortError';
+  return err;
+}
+
+function linkAbortSignals(
+  external: AbortSignal | undefined,
+  local: AbortController
+): () => void {
+  if (!external) return () => undefined;
+  if (external.aborted) {
+    local.abort();
+    return () => undefined;
+  }
+  const onAbort = () => local.abort();
+  external.addEventListener('abort', onAbort);
+  return () => external.removeEventListener('abort', onAbort);
+}
+
+/**
+ * Abort-aware JSON parse: response.json() is not always cancelled by fetch's
+ * AbortSignal after headers arrive, so race against the same controller.
+ */
+async function readJsonWithSignal(
+  response: Response,
+  signal: AbortSignal
+): Promise<any> {
+  if (signal.aborted) {
+    throw abortError();
+  }
+  return await new Promise((resolve, reject) => {
+    const onAbort = () => {
+      reject(abortError());
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    response
+      .json()
+      .then((data) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(data);
+      })
+      .catch((err) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      });
+  });
+}
+
 /**
  * 通用的带缓存搜索函数
  */
@@ -27,7 +104,8 @@ async function searchWithCache(
   query: string,
   page: number,
   url: string,
-  timeoutMs = 8000
+  timeoutMs = 8000,
+  externalSignal?: AbortSignal
 ): Promise<{ results: SearchResult[]; pageCount?: number }> {
   // 先查缓存
   const cached = getCachedSearchPage(apiSite.key, query, page);
@@ -39,17 +117,21 @@ async function searchWithCache(
     }
   }
 
-  // 缓存未命中，发起网络请求
+  if (externalSignal?.aborted) {
+    return { results: [] };
+  }
+
+  // 缓存未命中，发起网络请求。超时与外部 abort 共用同一个 AbortController，
+  // 覆盖 fetch + response.json()，避免只清 headers 后 json 挂死。
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const unlink = linkAbortSignals(externalSignal, controller);
 
   try {
     const response = await fetch(url, {
       headers: API_CONFIG.search.headers,
       signal: controller.signal,
     });
-
-    clearTimeout(timeoutId);
 
     if (!response.ok) {
       if (response.status === 403) {
@@ -58,7 +140,7 @@ async function searchWithCache(
       return { results: [] };
     }
 
-    const data = await response.json();
+    const data = await readJsonWithSignal(response, controller.signal);
     if (
       !data ||
       !data.list ||
@@ -122,88 +204,142 @@ async function searchWithCache(
     });
 
     // 过滤掉集数为 0 的结果
-    const results = allResults.filter((result: SearchResult) => result.episodes.length > 0);
+    const results = allResults.filter(
+      (result: SearchResult) => result.episodes.length > 0
+    );
 
-    const pageCount = page === 1 ? data.pagecount || 1 : undefined;
+    const pageCount =
+      typeof data.pagecount === 'number' && data.pagecount > 0
+        ? data.pagecount
+        : undefined;
     // 写入缓存（成功）
     setCachedSearchPage(apiSite.key, query, page, 'ok', results, pageCount);
     return { results, pageCount };
   } catch (error: any) {
-    clearTimeout(timeoutId);
-    // 识别被 AbortController 中止（超时）
-    const aborted = error?.name === 'AbortError' || error?.code === 20 || error?.message?.includes('aborted');
-    if (aborted) {
+    // 识别被 AbortController 中止（超时 / 客户端断开）
+    if (isAbortError(error)) {
       setCachedSearchPage(apiSite.key, query, page, 'timeout', []);
     }
     return { results: [] };
+  } finally {
+    clearTimeout(timeoutId);
+    unlink();
   }
+}
+
+function buildSearchPageUrl(
+  apiBaseUrl: string,
+  query: string,
+  page: number
+): string {
+  if (page <= 1) {
+    return apiBaseUrl + API_CONFIG.search.path + encodeURIComponent(query);
+  }
+  return (
+    apiBaseUrl +
+    API_CONFIG.search.pagePath
+      .replace('{query}', encodeURIComponent(query))
+      .replace('{page}', page.toString())
+  );
 }
 
 export async function searchFromApi(
   apiSite: ApiSite,
-  query: string
-): Promise<SearchResult[]> {
+  query: string,
+  opts: SearchFromApiOptions = {}
+): Promise<SearchFromApiOutcome> {
+  const empty: SearchFromApiOutcome = {
+    results: [],
+    page: opts.startPage ?? 1,
+    pageCount: 1,
+    hasMore: false,
+  };
+
   try {
+    if (opts.signal?.aborted) {
+      return empty;
+    }
+
     const config = await getConfig();
-    const MAX_SEARCH_PAGES: number = config.SiteConfig.SearchDownstreamMaxPage;
+    const absoluteMax = Math.max(
+      1,
+      Number(config.SiteConfig.SearchDownstreamMaxPage) || 1
+    );
     const sourceTimeoutMs =
       Math.max(1, Number(config.SiteConfig.SearchSourceTimeoutSeconds) || 8) *
       1000;
 
-    const apiBaseUrl = apiSite.api;
-    const apiUrl =
-      apiBaseUrl + API_CONFIG.search.path + encodeURIComponent(query);
+    const startPage = Math.max(1, opts.startPage ?? 1);
+    const pagesInCall = Math.max(1, opts.maxPages ?? absoluteMax);
+    const endPage = Math.min(startPage + pagesInCall - 1, absoluteMax);
 
-    // 使用新的缓存搜索函数处理第一页
-    const firstPageResult = await searchWithCache(
-      apiSite,
-      query,
-      1,
-      apiUrl,
-      sourceTimeoutMs
-    );
-    const results = firstPageResult.results;
-    const pageCountFromFirst = firstPageResult.pageCount;
-
-    // 获取总页数
-    const pageCount = pageCountFromFirst || 1;
-    // 确定需要获取的额外页数
-    const pagesToFetch = Math.min(pageCount - 1, MAX_SEARCH_PAGES - 1);
-
-    // 如果有额外页数，获取更多页的结果
-    if (pagesToFetch > 0) {
-      const additionalPagePromises = [];
-
-      for (let page = 2; page <= pagesToFetch + 1; page++) {
-        const pageUrl =
-          apiBaseUrl +
-          API_CONFIG.search.pagePath
-            .replace('{query}', encodeURIComponent(query))
-            .replace('{page}', page.toString());
-
-        const pagePromise = (async () => {
-          // 使用新的缓存搜索函数处理分页
-          const pageResult = await searchWithCache(apiSite, query, page, pageUrl, sourceTimeoutMs);
-          return pageResult.results;
-        })();
-
-        additionalPagePromises.push(pagePromise);
-      }
-
-      // 等待所有额外页的结果
-      const additionalResults = await Promise.all(additionalPagePromises);
-
-      // 合并所有页的结果
-      additionalResults.forEach((pageResults) => {
-        if (pageResults.length > 0) {
-          results.push(...pageResults);
-        }
-      });
+    if (startPage > absoluteMax) {
+      return { ...empty, page: absoluteMax, pageCount: absoluteMax };
     }
 
-    return results;
+    const apiBaseUrl = apiSite.api;
+    const allResults: SearchResult[] = [];
+    let pageCount = 1;
+    let lastFetchedPage = startPage - 1;
+
+    // Prefer cached pagecount from page 1 when loading later pages.
+    if (startPage > 1) {
+      const cachedFirst = getCachedSearchPage(apiSite.key, query, 1);
+      if (cachedFirst?.pageCount && cachedFirst.pageCount > 0) {
+        pageCount = cachedFirst.pageCount;
+      }
+    }
+
+    for (let page = startPage; page <= endPage; page++) {
+      if (opts.signal?.aborted) {
+        break;
+      }
+      // Stop early when we already know there are no further CMS pages.
+      if (page > pageCount && page > startPage) {
+        break;
+      }
+
+      const pageUrl = buildSearchPageUrl(apiBaseUrl, query, page);
+      const pageResult = await searchWithCache(
+        apiSite,
+        query,
+        page,
+        pageUrl,
+        sourceTimeoutMs,
+        opts.signal
+      );
+
+      if (pageResult.pageCount && pageResult.pageCount > 0) {
+        pageCount = pageResult.pageCount;
+      }
+
+      lastFetchedPage = page;
+      if (pageResult.results.length > 0) {
+        allResults.push(...pageResult.results);
+      }
+
+      // Empty first page of a multi-page call: still advance lastFetchedPage
+      // so hasMore can be computed; stop chasing further empty pages.
+      if (pageResult.results.length === 0 && page === startPage) {
+        // keep going only if we explicitly wanted multiple pages and know more exist
+        if (page >= pageCount) break;
+      }
+    }
+
+    if (lastFetchedPage < startPage) {
+      lastFetchedPage = startPage;
+    }
+
+    const hasMore = lastFetchedPage < pageCount && lastFetchedPage < absoluteMax;
+
+    return {
+      results: allResults,
+      page: lastFetchedPage,
+      pageCount: Math.max(pageCount, lastFetchedPage),
+      hasMore,
+    };
   } catch (error) {
-    return [];
+    return empty;
   }
 }
 

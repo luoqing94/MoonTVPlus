@@ -118,7 +118,8 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const results = await searchFromApi(targetSite, query);
+    const outcome = await searchFromApi(targetSite, query);
+    const results = Array.isArray(outcome?.results) ? outcome.results : [];
     let result = results.filter((r) => r.title === query);
     if (!config.SiteConfig.DisableYellowFilter) {
       result = result.filter((result) => {

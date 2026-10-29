@@ -92,6 +92,8 @@ export async function GET(request: NextRequest) {
 
   // 共享状态
   let streamClosed = false;
+  // 客户端断开或整体取消时，真正 abort 下游 fan-out（不只是 streamClosed 标志）
+  const streamAbort = new AbortController();
 
   // 创建可读流
   const stream = new ReadableStream({
@@ -130,10 +132,16 @@ export async function GET(request: NextRequest) {
       const totalSourceCount = sortedApiSites.length + (hasOpenList ? 1 : 0) + embySourcesCount + enabledScripts.length;
 
       // 发送开始事件
+      const maxPagesCap = Math.max(
+        1,
+        Number(config.SiteConfig.SearchDownstreamMaxPage) || 1
+      );
+
       const startEvent = `data: ${JSON.stringify({
         type: 'start',
         query,
         totalSources: totalSourceCount,
+        maxPages: maxPagesCap,
         timestamp: Date.now()
       })}\n\n`;
 
@@ -371,24 +379,28 @@ export async function GET(request: NextRequest) {
           });
       }
 
-      // 为每个源创建搜索 Promise
+      // 为每个源创建搜索 Promise（首搜只拉第 1 页；超时/断开真正 abort）
       const searchPromises = sortedApiSites.map(async (site) => {
-        try {
-          // 添加超时控制
-          const searchPromise = Promise.race([
-            searchFromApi(site, head),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error(`${site.name} timeout`)), sourceTimeoutMs)
-            ),
-          ]);
+        const sourceAbort = new AbortController();
+        const timeoutId = setTimeout(() => sourceAbort.abort(), sourceTimeoutMs);
+        const onStreamAbort = () => sourceAbort.abort();
+        streamAbort.signal.addEventListener('abort', onStreamAbort);
 
-          const results = await searchPromise as any[];
+        try {
+          if (streamAbort.signal.aborted) {
+            throw new Error(`${site.name} cancelled`);
+          }
+
+          const outcome = await searchFromApi(site, head, {
+            signal: sourceAbort.signal,
+            startPage: 1,
+            maxPages: 1,
+          });
+
+          const results = Array.isArray(outcome?.results) ? outcome.results : [];
 
           // 添加安全检查，确保结果是数组
-          const safeResults = filterMoviesByRestTokens(
-            Array.isArray(results) ? results : [],
-            rest
-          );
+          const safeResults = filterMoviesByRestTokens(results, rest);
 
           // 过滤黄色内容
           let filteredResults = safeResults;
@@ -404,6 +416,10 @@ export async function GET(request: NextRequest) {
             weight: result.weight ?? (weightMap.get(result.source) ?? 0),
           }));
 
+          const page = outcome?.page ?? 1;
+          const pageCount = outcome?.pageCount ?? 1;
+          const hasMore = Boolean(outcome?.hasMore);
+
           // 发送该源的搜索结果
           completedSources++;
 
@@ -413,6 +429,9 @@ export async function GET(request: NextRequest) {
               source: site.key,
               sourceName: site.name,
               results: filteredResults,
+              page,
+              pageCount,
+              hasMore,
               timestamp: Date.now()
             })}\n\n`;
 
@@ -438,6 +457,9 @@ export async function GET(request: NextRequest) {
               source: site.key,
               sourceName: site.name,
               error: error instanceof Error ? error.message : '搜索失败',
+              page: 0,
+              pageCount: 0,
+              hasMore: false,
               timestamp: Date.now()
             })}\n\n`;
 
@@ -446,6 +468,9 @@ export async function GET(request: NextRequest) {
               return; // 连接已关闭，停止处理
             }
           }
+        } finally {
+          clearTimeout(timeoutId);
+          streamAbort.signal.removeEventListener('abort', onStreamAbort);
         }
 
         // 检查是否所有源都已完成
@@ -588,8 +613,11 @@ export async function GET(request: NextRequest) {
     },
 
     cancel() {
-      // 客户端断开连接时，标记流已关闭
+      // 客户端断开：标记流关闭，并 abort 所有下游 searchFromApi / fetch
       streamClosed = true;
+      try {
+        streamAbort.abort();
+      } catch {}
       console.log('Client disconnected, cancelling search stream');
     },
   });

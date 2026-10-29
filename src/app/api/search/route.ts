@@ -192,17 +192,20 @@ export async function GET(request: NextRequest) {
     : Promise.resolve([]);
 
   // 添加超时控制和错误处理，避免慢接口拖累整体响应
-  const searchPromises = apiSites.map((site) =>
-    Promise.race([
-      searchFromApi(site, head),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`${site.name} timeout`)), sourceTimeoutMs)
-      ),
-    ]).catch((err) => {
-      console.warn(`搜索失败 ${site.name}:`, err.message);
-      return []; // 返回空数组而不是抛出错误
-    })
-  );
+  // 传统非流式接口仍按后台 maxPages 一次拉完；超时真正 abort 下游请求
+  const searchPromises = apiSites.map((site) => {
+    const sourceAbort = new AbortController();
+    const timeoutId = setTimeout(() => sourceAbort.abort(), sourceTimeoutMs);
+    return searchFromApi(site, head, { signal: sourceAbort.signal })
+      .then((outcome) =>
+        Array.isArray(outcome?.results) ? outcome.results : []
+      )
+      .catch((err) => {
+        console.warn(`搜索失败 ${site.name}:`, err?.message || err);
+        return []; // 返回空数组而不是抛出错误
+      })
+      .finally(() => clearTimeout(timeoutId));
+  });
 
   const scriptSummaries = privateOnly ? [] : await listEnabledSourceScripts();
   const scriptPromises = scriptSummaries.map((script) =>
