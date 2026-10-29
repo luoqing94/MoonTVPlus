@@ -73,6 +73,7 @@ import SearchResultFilter, {
 } from '@/components/SearchResultFilter';
 import SearchSuggestions from '@/components/SearchSuggestions';
 import VideoCard, { VideoCardHandle } from '@/components/VideoCard';
+import SearchOverlayScrollbar from '@/components/SearchOverlayScrollbar';
 import VirtualScrollableGrid from '@/components/VirtualScrollableGrid';
 
 const PANSOU_CLOUD_TYPE_OPTIONS = Object.entries(CLOUD_TYPE_NAMES).map(
@@ -93,6 +94,8 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
   const [searchHistory, setSearchHistory] = useState<string[]>([]);
   // 返回顶部按钮显示状态
   const [showBackToTop, setShowBackToTop] = useState(false);
+  // 搜索结果区域（桌面悬停显示覆盖滚动条）
+  const resultsAreaRef = useRef<HTMLElement | null>(null);
   // 选项卡状态: 'video' 或 'pansou' 或 'acg'
   const [activeTab, setActiveTab] = useState<'video' | 'pansou' | 'acg'>(
     'video'
@@ -2546,7 +2549,10 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
           }`}
         >
           {showResults ? (
-            <section className='mb-12'>
+            <section
+              ref={resultsAreaRef}
+              className='mb-12'
+            >
               {activeTab === 'video' ? (
                 <>
                   {/* 影视搜索结果 */}
@@ -3098,6 +3104,15 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
           alt={previewImage.alt}
         />
       )}
+
+      <SearchOverlayScrollbar
+        hoverTargetRef={resultsAreaRef}
+        enabled={
+          showResults &&
+          activeTab === 'video' &&
+          searchResults.length > 0
+        }
+      />
 
       {/* 返回顶部悬浮按钮 */}
       <button
