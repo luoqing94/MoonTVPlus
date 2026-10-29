@@ -44,6 +44,9 @@ export async function GET(request: NextRequest) {
   const { head, rest } = splitQuery(query);
 
   const config = await getConfig();
+  const sourceTimeoutMs =
+    Math.max(1, Number(config.SiteConfig.SearchSourceTimeoutSeconds) || 8) *
+    1000;
   const apiSites = privateOnly
     ? []
     : await getAvailableApiSites(authInfo.username, specialOnly);
@@ -326,7 +329,7 @@ export async function GET(request: NextRequest) {
             }
           })(),
           new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('OpenList timeout')), 20000)
+            setTimeout(() => reject(new Error('OpenList timeout')), sourceTimeoutMs)
           ),
         ])
           .then((openlistResults: any) => {
@@ -375,7 +378,7 @@ export async function GET(request: NextRequest) {
           const searchPromise = Promise.race([
             searchFromApi(site, head),
             new Promise((_, reject) =>
-              setTimeout(() => reject(new Error(`${site.name} timeout`)), 20000)
+              setTimeout(() => reject(new Error(`${site.name} timeout`)), sourceTimeoutMs)
             ),
           ]);
 
@@ -478,7 +481,7 @@ export async function GET(request: NextRequest) {
               payload: {},
             }),
             new Promise((_, reject) =>
-              setTimeout(() => reject(new Error(`${script.name} timeout`)), 20000)
+              setTimeout(() => reject(new Error(`${script.name} timeout`)), sourceTimeoutMs)
             ),
           ]);
 
@@ -496,7 +499,7 @@ export async function GET(request: NextRequest) {
                   },
                 }),
                 new Promise((_, reject) =>
-                  setTimeout(() => reject(new Error(`${script.name}/${source.name} timeout`)), 20000)
+                  setTimeout(() => reject(new Error(`${script.name}/${source.name} timeout`)), sourceTimeoutMs)
                 ),
               ]);
 

@@ -144,17 +144,26 @@ export async function searchFromApi(
   query: string
 ): Promise<SearchResult[]> {
   try {
+    const config = await getConfig();
+    const MAX_SEARCH_PAGES: number = config.SiteConfig.SearchDownstreamMaxPage;
+    const sourceTimeoutMs =
+      Math.max(1, Number(config.SiteConfig.SearchSourceTimeoutSeconds) || 8) *
+      1000;
+
     const apiBaseUrl = apiSite.api;
     const apiUrl =
       apiBaseUrl + API_CONFIG.search.path + encodeURIComponent(query);
 
     // 使用新的缓存搜索函数处理第一页
-    const firstPageResult = await searchWithCache(apiSite, query, 1, apiUrl, 8000);
+    const firstPageResult = await searchWithCache(
+      apiSite,
+      query,
+      1,
+      apiUrl,
+      sourceTimeoutMs
+    );
     const results = firstPageResult.results;
     const pageCountFromFirst = firstPageResult.pageCount;
-
-    const config = await getConfig();
-    const MAX_SEARCH_PAGES: number = config.SiteConfig.SearchDownstreamMaxPage;
 
     // 获取总页数
     const pageCount = pageCountFromFirst || 1;
@@ -174,7 +183,7 @@ export async function searchFromApi(
 
         const pagePromise = (async () => {
           // 使用新的缓存搜索函数处理分页
-          const pageResult = await searchWithCache(apiSite, query, page, pageUrl, 8000);
+          const pageResult = await searchWithCache(apiSite, query, page, pageUrl, sourceTimeoutMs);
           return pageResult.results;
         })();
 

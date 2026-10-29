@@ -366,6 +366,7 @@ interface SiteConfig {
   Announcement: string;
   AnnouncementDisplayMode?: 'once' | 'every';
   SearchDownstreamMaxPage: number;
+  SearchSourceTimeoutSeconds?: number;
   SiteInterfaceCacheTime: number;
   DoubanProxyType: string;
   DoubanProxy: string;
@@ -11089,6 +11090,7 @@ const SiteConfigComponent = ({
     Announcement: '',
     AnnouncementDisplayMode: 'once',
     SearchDownstreamMaxPage: 1,
+    SearchSourceTimeoutSeconds: 8,
     SiteInterfaceCacheTime: 7200,
     DoubanProxyType: 'cmliussss-cdn-tencent',
     DoubanProxy: '',
@@ -11212,6 +11214,10 @@ const SiteConfigComponent = ({
     if (config?.SiteConfig) {
       setSiteSettings({
         ...config.SiteConfig,
+        SearchDownstreamMaxPage:
+          config.SiteConfig.SearchDownstreamMaxPage ?? 1,
+        SearchSourceTimeoutSeconds:
+          config.SiteConfig.SearchSourceTimeoutSeconds ?? 8,
         DoubanProxyType:
           config.SiteConfig.DoubanProxyType || 'cmliussss-cdn-tencent',
         DoubanProxy: config.SiteConfig.DoubanProxy || '',
@@ -11693,6 +11699,32 @@ const SiteConfigComponent = ({
           }
           className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-green-500 focus:border-transparent'
         />
+        <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+          每个影视源最多拉取几页结果，默认 1 页（更快；需要更多结果时再调高）
+        </p>
+      </div>
+
+      {/* 单源搜索超时（秒） */}
+      <div>
+        <label className='block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2'>
+          单源搜索超时（秒）
+        </label>
+        <input
+          type='number'
+          min={1}
+          max={60}
+          value={siteSettings.SearchSourceTimeoutSeconds ?? 8}
+          onChange={(e) =>
+            setSiteSettings((prev) => ({
+              ...prev,
+              SearchSourceTimeoutSeconds: Number(e.target.value),
+            }))
+          }
+          className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-green-500 focus:border-transparent'
+        />
+        <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
+          单个源请求超过该秒数即跳过，默认 8 秒；过短可能漏结果，过长会拖慢整体进度
+        </p>
       </div>
 
       {/* 站点接口缓存时间 */}

@@ -47,6 +47,9 @@ export async function GET(request: NextRequest) {
   const { head, rest } = splitQuery(query);
 
   const config = await getConfig();
+  const sourceTimeoutMs =
+    Math.max(1, Number(config.SiteConfig.SearchSourceTimeoutSeconds) || 8) *
+    1000;
   const apiSites = privateOnly
     ? []
     : await getAvailableApiSites(authInfo.username, specialOnly);
@@ -122,7 +125,7 @@ export async function GET(request: NextRequest) {
         }
       })(),
       new Promise<any[]>((_, reject) =>
-        setTimeout(() => reject(new Error(`${embyConfig.name} timeout`)), 20000)
+        setTimeout(() => reject(new Error(`${embyConfig.name} timeout`)), sourceTimeoutMs)
       ),
     ]).catch((error) => {
       console.error(`[Search] 搜索 ${embyConfig.name} 超时:`, error);
@@ -180,7 +183,7 @@ export async function GET(request: NextRequest) {
           }
         })(),
         new Promise<any[]>((_, reject) =>
-          setTimeout(() => reject(new Error('OpenList timeout')), 20000)
+          setTimeout(() => reject(new Error('OpenList timeout')), sourceTimeoutMs)
         ),
       ]).catch((error) => {
         console.error('[Search] 搜索 OpenList 超时:', error);
@@ -193,7 +196,7 @@ export async function GET(request: NextRequest) {
     Promise.race([
       searchFromApi(site, head),
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`${site.name} timeout`)), 20000)
+        setTimeout(() => reject(new Error(`${site.name} timeout`)), sourceTimeoutMs)
       ),
     ]).catch((err) => {
       console.warn(`搜索失败 ${site.name}:`, err.message);
@@ -242,7 +245,7 @@ export async function GET(request: NextRequest) {
         }
       })(),
       new Promise<any[]>((_, reject) =>
-        setTimeout(() => reject(new Error(`${script.name} timeout`)), 20000)
+        setTimeout(() => reject(new Error(`${script.name} timeout`)), sourceTimeoutMs)
       ),
     ]).catch((error) => {
       console.error(`[Search] 搜索脚本 ${script.name} 超时:`, error);

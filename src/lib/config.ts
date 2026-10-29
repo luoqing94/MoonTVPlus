@@ -291,7 +291,8 @@ async function getInitConfig(
           ? 'every'
           : 'once',
       SearchDownstreamMaxPage:
-        Number(process.env.NEXT_PUBLIC_SEARCH_MAX_PAGE) || 5,
+        Number(process.env.NEXT_PUBLIC_SEARCH_MAX_PAGE) || 1,
+      SearchSourceTimeoutSeconds: 8,
       SiteInterfaceCacheTime: cfgFile.cache_time || 7200,
       DoubanProxyType:
         process.env.NEXT_PUBLIC_DOUBAN_PROXY_TYPE || 'cmliussss-cdn-tencent',
@@ -540,7 +541,8 @@ export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
     adminConfig.SiteConfig = {
       SiteName: 'MoonTVPlus',
       Announcement: '',
-      SearchDownstreamMaxPage: 5,
+      SearchDownstreamMaxPage: 1,
+      SearchSourceTimeoutSeconds: 8,
       SiteInterfaceCacheTime: 7200,
       DoubanProxyType: 'cmliussss-cdn-tencent',
       DoubanProxy: '',
@@ -602,6 +604,13 @@ export function configSelfCheck(adminConfig: AdminConfig): AdminConfig {
   // 确保评论开关存在
   if (adminConfig.SiteConfig.EnableComments === undefined) {
     adminConfig.SiteConfig.EnableComments = false;
+  }
+  if (
+    adminConfig.SiteConfig.SearchSourceTimeoutSeconds === undefined ||
+    typeof adminConfig.SiteConfig.SearchSourceTimeoutSeconds !== 'number' ||
+    !(adminConfig.SiteConfig.SearchSourceTimeoutSeconds > 0)
+  ) {
+    adminConfig.SiteConfig.SearchSourceTimeoutSeconds = 8;
   }
   // 确保公告显示模式存在
   if (adminConfig.SiteConfig.AnnouncementDisplayMode === undefined) {
