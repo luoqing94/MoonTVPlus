@@ -16,6 +16,7 @@ export const LOCAL_SETTINGS_KEYS: string[] = [
   'saveLivePlayRecords',
   'enableOptimization',
   'enableBackgroundProbe',
+  'titleFoldPreferAll',
   'preferStrategy',
   'preferMode',
   'speedTestTimeout',

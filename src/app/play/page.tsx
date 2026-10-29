@@ -100,6 +100,7 @@ import { base58Decode, getVideoResolutionFromM3u8, processImageUrl } from '@/lib
 import {
   isBackgroundProbeEnabled,
   isProbeCacheSufficientForWholeGroup,
+  isTitleFoldPreferAllEnabled,
   preferProbeSourceKey,
   readProbeCache,
   writeProbeResults,
@@ -5825,18 +5826,19 @@ function PlayPageClient() {
         setLoadingStage('preferring');
         setLoadingMessage('⚡ 正在优选最佳播放源...');
 
-        // 同标题折叠：若 session 探针缓存已足够，本次优选可跨整组年份
+        // 同标题折叠：开关开或探针缓存已足够时，本次优选可跨整组年份
         try {
           const foldTitle = videoTitleRef.current || videoTitle || '';
           const foldCtx = readTitleFoldContext(foldTitle);
           const probeCache = readProbeCache(foldTitle);
-          if (
-            foldCtx &&
-            isProbeCacheSufficientForWholeGroup(
-              probeCache,
-              videoYearRef.current || undefined
-            )
-          ) {
+          const preferWholeGroup =
+            !!foldCtx &&
+            (isTitleFoldPreferAllEnabled() ||
+              isProbeCacheSufficientForWholeGroup(
+                probeCache,
+                videoYearRef.current || undefined
+              ));
+          if (preferWholeGroup) {
             const cachedPayload = readSearchCache(searchTitle || videoTitle);
             if (cachedPayload?.results?.length) {
               const wholeGroup = filterSourcesForCurrentVideo(
@@ -5846,7 +5848,8 @@ function PlayPageClient() {
               if (wholeGroup.length > sourcesInfo.length) {
                 console.log(
                   '[Play] 使用同标题折叠整组候选进行优选',
-                  wholeGroup.length
+                  wholeGroup.length,
+                  isTitleFoldPreferAllEnabled() ? '(开关)' : '(探针缓存)'
                 );
                 sourcesInfo = applyCorrectionsToSources(wholeGroup);
                 setAvailableSources(sourcesInfo);

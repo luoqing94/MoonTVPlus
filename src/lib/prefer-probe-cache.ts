@@ -146,6 +146,7 @@ export function isProbeCacheSufficientForWholeGroup(
 
 export const ENABLE_BACKGROUND_PROBE_KEY = 'enableBackgroundProbe';
 export const TITLE_FOLD_ENABLED_KEY = 'titleFoldEnabled';
+export const TITLE_FOLD_PREFER_ALL_KEY = 'titleFoldPreferAll';
 
 export function readBoolLocalSetting(
   key: string,
@@ -171,4 +172,8 @@ export function isBackgroundProbeEnabled(): boolean {
 
 export function isTitleFoldEnabled(): boolean {
   return readBoolLocalSetting(TITLE_FOLD_ENABLED_KEY, true);
+}
+
+export function isTitleFoldPreferAllEnabled(): boolean {
+  return readBoolLocalSetting(TITLE_FOLD_PREFER_ALL_KEY, false);
 }

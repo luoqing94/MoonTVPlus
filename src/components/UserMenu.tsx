@@ -49,6 +49,7 @@ import {
 import {
   ENABLE_BACKGROUND_PROBE_KEY,
   TITLE_FOLD_ENABLED_KEY,
+  TITLE_FOLD_PREFER_ALL_KEY,
 } from '@/lib/prefer-probe-cache';
 import { clearBangumiImageFallbackCache } from '@/lib/utils';
 import { CURRENT_VERSION } from '@/lib/version';
@@ -175,6 +176,7 @@ export const UserMenu: React.FC = () => {
   const [doubanProxyUrl, setDoubanProxyUrl] = useState('');
   const [enableOptimization, setEnableOptimization] = useState(true);
   const [enableBackgroundProbe, setEnableBackgroundProbe] = useState(true);
+  const [titleFoldPreferAll, setTitleFoldPreferAll] = useState(false);
   const [preferStrategy, setPreferStrategy] = useState<'fast' | 'full'>('fast');
   const [preferMode, setPreferMode] = useState<
     'balanced' | 'resolution' | 'speed'
@@ -751,6 +753,17 @@ export const UserMenu: React.FC = () => {
           setEnableBackgroundProbe(JSON.parse(savedBackgroundProbe));
         } catch {
           setEnableBackgroundProbe(savedBackgroundProbe === 'true');
+        }
+      }
+
+      const savedTitleFoldPreferAll = localStorage.getItem(
+        TITLE_FOLD_PREFER_ALL_KEY
+      );
+      if (savedTitleFoldPreferAll !== null) {
+        try {
+          setTitleFoldPreferAll(JSON.parse(savedTitleFoldPreferAll));
+        } catch {
+          setTitleFoldPreferAll(savedTitleFoldPreferAll === 'true');
         }
       }
 
@@ -1756,6 +1769,16 @@ export const UserMenu: React.FC = () => {
     }
   };
 
+  const handleTitleFoldPreferAllToggle = (value: boolean) => {
+    setTitleFoldPreferAll(value);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(
+        TITLE_FOLD_PREFER_ALL_KEY,
+        JSON.stringify(value)
+      );
+    }
+  };
+
   const handlePreferStrategyChange = (value: 'fast' | 'full') => {
     setPreferStrategy(value);
     if (typeof window !== 'undefined') {
@@ -2231,6 +2254,7 @@ export const UserMenu: React.FC = () => {
 
     setDefaultAggregateSearch(true);
     setEnableBackgroundProbe(true);
+    setTitleFoldPreferAll(false);
     setSaveLivePlayRecords(false);
     setEnableOptimization(true);
     setPreferStrategy('fast');
@@ -2273,6 +2297,7 @@ export const UserMenu: React.FC = () => {
       localStorage.setItem(SAVE_LIVE_PLAY_RECORDS_KEY, 'false');
       localStorage.setItem('enableOptimization', JSON.stringify(true));
       localStorage.setItem(ENABLE_BACKGROUND_PROBE_KEY, JSON.stringify(true));
+      localStorage.setItem(TITLE_FOLD_PREFER_ALL_KEY, JSON.stringify(false));
       localStorage.setItem(TITLE_FOLD_ENABLED_KEY, JSON.stringify(true));
       localStorage.setItem('preferStrategy', 'fast');
       localStorage.setItem('preferMode', 'balanced');
@@ -2388,6 +2413,9 @@ export const UserMenu: React.FC = () => {
         break;
       case 'enableBackgroundProbe':
         setEnableBackgroundProbe(true);
+        break;
+      case 'titleFoldPreferAll':
+        setTitleFoldPreferAll(false);
         break;
       case 'titleFoldEnabled':
         break;
@@ -2552,6 +2580,9 @@ export const UserMenu: React.FC = () => {
           break;
         case 'enableBackgroundProbe':
           setEnableBackgroundProbe(value === 'true');
+          break;
+        case 'titleFoldPreferAll':
+          setTitleFoldPreferAll(value === 'true');
           break;
         case 'titleFoldEnabled':
           break;
@@ -4007,6 +4038,31 @@ export const UserMenu: React.FC = () => {
                               checked={enableBackgroundProbe}
                               onChange={(e) =>
                                 handleBackgroundProbeToggle(e.target.checked)
+                              }
+                            />
+                            <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
+                            <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
+                          </div>
+                        </label>
+                      </div>
+
+                      <div className='flex items-center justify-between'>
+                        <div>
+                          <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                            折叠整组优选
+                          </h4>
+                          <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                            从同标题折叠卡进入时，直接对整组全部源优选，不必等探针缓存
+                          </p>
+                        </div>
+                        <label className='flex items-center cursor-pointer'>
+                          <div className='relative'>
+                            <input
+                              type='checkbox'
+                              className='sr-only peer'
+                              checked={titleFoldPreferAll}
+                              onChange={(e) =>
+                                handleTitleFoldPreferAllToggle(e.target.checked)
                               }
                             />
                             <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
