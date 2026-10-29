@@ -18,10 +18,10 @@ const TRACK_BOTTOM = 96;
 
 /**
  * Overlay scrollbar for the search page (body is the scroll root).
- * Hidden by default; fades in on results-area hover (desktop), while
- * scrolling, or on touch; supports thumb drag and track click/tap on
- * both mobile and desktop. Thin visual thumb with a wider touch hit area
- * on small screens.
+ * Desktop only (md+): iOS Safari breaks layout when a fixed overlay
+ * scrollbar programmatically scrolls the page during thumb drag.
+ * Hidden by default; fades in on results-area hover or while scrolling;
+ * supports thumb drag and track click on desktop.
  */
 export default function SearchOverlayScrollbar({
   hoverTargetRef,
@@ -127,14 +127,8 @@ export default function SearchOverlayScrollbar({
       keepVisibleRef.current = false;
       scheduleHide();
     };
-    // Touch: briefly reveal when interacting with the results area.
-    const onTouchStart = () => {
-      recompute();
-      reveal();
-    };
     target?.addEventListener('mouseenter', onEnter);
     target?.addEventListener('mouseleave', onLeave);
-    target?.addEventListener('touchstart', onTouchStart, { passive: true });
 
     const ro =
       typeof ResizeObserver !== 'undefined'
@@ -150,7 +144,6 @@ export default function SearchOverlayScrollbar({
       window.removeEventListener('resize', onResize);
       target?.removeEventListener('mouseenter', onEnter);
       target?.removeEventListener('mouseleave', onLeave);
-      target?.removeEventListener('touchstart', onTouchStart);
       ro?.disconnect();
       clearHideTimer();
     };
@@ -229,7 +222,7 @@ export default function SearchOverlayScrollbar({
   return (
     <div
       ref={trackRef}
-      className={`fixed right-0 z-[400] w-5 touch-none md:right-1.5 md:w-2 ${
+      className={`hidden md:block fixed right-1.5 z-[400] w-2 touch-none ${
         visible ? 'pointer-events-auto' : 'pointer-events-none'
       }`}
       style={{ top: TRACK_TOP, bottom: TRACK_BOTTOM }}
@@ -247,7 +240,7 @@ export default function SearchOverlayScrollbar({
     >
       {/* Visual thumb: inset on mobile so the hit area (w-5) is wider than the bar */}
       <div
-        className={`absolute rounded-full bg-gray-400/60 shadow-sm transition-opacity duration-200 active:bg-green-500/80 hover:bg-green-500/75 dark:bg-gray-500/55 dark:active:bg-green-400/80 dark:hover:bg-green-400/75 left-1.5 right-1.5 md:left-0 md:right-0 ${
+        className={`absolute left-0 right-0 rounded-full bg-gray-400/60 shadow-sm transition-opacity duration-200 hover:bg-green-500/75 dark:bg-gray-500/55 dark:hover:bg-green-400/75 ${
           visible ? 'opacity-100' : 'opacity-0'
         }`}
         style={{
