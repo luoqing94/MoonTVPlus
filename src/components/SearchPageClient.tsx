@@ -2,6 +2,7 @@
 'use client';
 
 import {
+  ChevronDown,
   ChevronUp,
   Film,
   Grid2x2,
@@ -42,6 +43,16 @@ import {
   saveSearchScroll,
   scrollPageTo,
 } from '@/lib/search-scroll-restore';
+import {
+  TITLE_FOLD_ENABLED_KEY,
+  isTitleFoldEnabled,
+} from '@/lib/prefer-probe-cache';
+import {
+  buildTitleFoldContext,
+  buildTitleFoldGroups,
+  writeTitleFoldContext,
+  type TitleFoldGroup,
+} from '@/lib/title-fold';
 import {
   appendSpecialSourceParam,
   isSpecialSourceContext,
@@ -336,6 +347,10 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
   const [viewMode, setViewMode] = useState<'agg' | 'all'>(() => {
     return getDefaultAggregate() ? 'agg' : 'all';
   });
+  const [titleFoldEnabled, setTitleFoldEnabled] = useState(true);
+  const [expandedTitleFolds, setExpandedTitleFolds] = useState<
+    Record<string, boolean>
+  >({});
   const [resultDisplayMode, setResultDisplayMode] = useState<'card' | 'list'>(
     () => {
       if (typeof window !== 'undefined') {
@@ -822,15 +837,24 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     });
   }, [aggregatedResults, filterAgg, searchQuery]);
 
+  // 同标题折叠：在现有「标题+类型+年份」聚合之上再折一层
+  const foldedAggResults = useMemo(() => {
+    if (viewMode !== 'agg' || !titleFoldEnabled) return null;
+    return buildTitleFoldGroups(filteredAggResults);
+  }, [viewMode, titleFoldEnabled, filteredAggResults]);
+
   const useVirtualGrid = useMemo(() => {
     const cardCount =
       viewMode === 'agg'
-        ? filteredAggResults.length
+        ? foldedAggResults
+          ? foldedAggResults.length
+          : filteredAggResults.length
         : filteredAllResults.length;
     return resultDisplayMode === 'card' && cardCount >= 100;
   }, [
     viewMode,
     resultDisplayMode,
+    foldedAggResults,
     filteredAggResults.length,
     filteredAllResults.length,
   ]);
@@ -838,7 +862,9 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
   const resultCountMeta = useMemo(() => {
     const isAggregateView = viewMode === 'agg';
     const visibleCount = isAggregateView
-      ? filteredAggResults.length
+      ? foldedAggResults
+        ? foldedAggResults.length
+        : filteredAggResults.length
       : filteredAllResults.length;
     const totalCount = isAggregateView
       ? aggregatedResults.length
@@ -848,11 +874,17 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
       visibleCount,
       totalCount,
       isFiltered: visibleCount !== totalCount,
-      modeLabel: isAggregateView ? '聚合结果' : '搜索结果',
+      modeLabel: isAggregateView
+        ? titleFoldEnabled
+          ? '折叠结果'
+          : '聚合结果'
+        : '搜索结果',
       unit: isAggregateView ? '组' : '条',
     };
   }, [
     viewMode,
+    titleFoldEnabled,
+    foldedAggResults,
     filteredAggResults.length,
     filteredAllResults.length,
     aggregatedResults.length,
@@ -877,6 +909,23 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     }
   }, [exactSearch]);
 
+  const titleFoldLoadedRef = useRef(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setTitleFoldEnabled(isTitleFoldEnabled());
+    titleFoldLoadedRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !titleFoldLoadedRef.current) return;
+    localStorage.setItem(
+      TITLE_FOLD_ENABLED_KEY,
+      JSON.stringify(titleFoldEnabled)
+    );
+  }, [titleFoldEnabled]);
+
+
   useEffect(() => {
     if (!advancedOpen) return;
 
@@ -900,7 +949,163 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     };
   }, [advancedOpen]);
 
-  const getSearchResultUrl = (params: {
+
+  const prepareFoldNavigation = (group: TitleFoldGroup) => {
+    writeTitleFoldContext(buildTitleFoldContext(group));
+  };
+
+  const toggleTitleFoldExpand = (foldKey: string) => {
+    setExpandedTitleFolds((prev) => ({
+      ...prev,
+      [foldKey]: !prev[foldKey],
+    }));
+  };
+
+  const renderFoldYearRows = (group: TitleFoldGroup) => {
+    if (group.yearRows.length <= 1) return null;
+    const expanded = !!expandedTitleFolds[group.foldKey];
+    return (
+      <div className='mt-2 w-full space-y-1.5'>
+        <button
+          type='button'
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            toggleTitleFoldExpand(group.foldKey);
+          }}
+          className='inline-flex items-center gap-1 text-[11px] font-medium text-green-600 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300'
+        >
+          {expanded ? (
+            <ChevronUp className='h-3.5 w-3.5' />
+          ) : (
+            <ChevronDown className='h-3.5 w-3.5' />
+          )}
+          {expanded
+            ? '收起相似结果'
+            : `展开相似结果（${group.yearRows.length} 个年份）`}
+        </button>
+        {expanded && (
+          <div className='space-y-1.5 rounded-lg border border-gray-200/80 bg-gray-50/80 p-1.5 dark:border-gray-700 dark:bg-gray-800/60'>
+            {group.yearRows.map((row) => {
+              const yearLabel =
+                row.year && row.year !== 'unknown' ? row.year : '未知年份';
+              const isRep = row.mapKey === group.representative.mapKey;
+              return (
+                <button
+                  key={`fold-year-${group.foldKey}-${row.mapKey}`}
+                  type='button'
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    saveSearchPositionForPlayback();
+                    prepareFoldNavigation(group);
+                    router.push(
+                      getSearchResultUrl({
+                        title: row.title || group.representative.title,
+                        year: row.year,
+                        type: row.type,
+                        query:
+                          searchQuery.trim() !==
+                          (row.title || group.representative.title)
+                            ? searchQuery.trim()
+                            : '',
+                        isAggregate: true,
+                      })
+                    );
+                  }}
+                  className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-white dark:hover:bg-gray-700 ${
+                    isRep
+                      ? 'bg-white/80 ring-1 ring-green-200 dark:bg-gray-700/80 dark:ring-green-800'
+                      : ''
+                  }`}
+                >
+                  <span className='font-medium text-gray-800 dark:text-gray-100'>
+                    {yearLabel}
+                    {isRep ? ' · 封面' : ''}
+                  </span>
+                  <span className='shrink-0 text-[10px] text-gray-500 dark:text-gray-400'>
+                    {row.sourceCount} 源
+                    {row.sourceNames.slice(0, 2).length > 0
+                      ? ` · ${row.sourceNames.slice(0, 2).join('/')}`
+                      : ''}
+                    {row.sourceNames.length > 2 ? '…' : ''}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderFoldCard = (group: TitleFoldGroup) => {
+    const rep = group.representative;
+    const title = rep.title;
+    const mapKey = rep.mapKey;
+    if (!groupStatsRef.current.has(mapKey)) {
+      groupStatsRef.current.set(mapKey, {
+        episodes: rep.episodes,
+        source_names: group.allSourceNames,
+        douban_id: rep.doubanId,
+      });
+    }
+    const isAnime = rep.group.some((g) =>
+      isAnimeCategoryText(g.type_name, g.class)
+    );
+
+    if (resultDisplayMode === 'list') {
+      return (
+        <div key={`fold-${group.foldKey}`} className='w-full'>
+          {renderListItem({
+            key: `fold-${group.foldKey}`,
+            title,
+            poster: rep.poster,
+            year: rep.year,
+            type: rep.type,
+            episodes: rep.episodes,
+            sourceNames: group.allSourceNames,
+            doubanId: rep.doubanId,
+            desc: rep.desc,
+            vodRemarks: rep.vodRemarks,
+            isAggregate: true,
+            query:
+              searchQuery.trim() !== title ? searchQuery.trim() : '',
+            onBeforeNavigate: () => prepareFoldNavigation(group),
+          })}
+          {renderFoldYearRows(group)}
+        </div>
+      );
+    }
+
+    return (
+      <div key={`fold-${group.foldKey}`} className='w-full'>
+        <VideoCard
+          ref={getGroupRef(mapKey)}
+          from='search'
+          onBeforeNavigate={() => {
+            prepareFoldNavigation(group);
+            saveSearchPositionForPlayback();
+          }}
+          isAggregate={true}
+          title={title}
+          poster={rep.poster}
+          year={rep.year}
+          episodes={rep.episodes}
+          source_names={group.allSourceNames}
+          douban_id={rep.doubanId}
+          query={searchQuery.trim() !== title ? searchQuery.trim() : ''}
+          type={rep.type}
+          isAnime={isAnime}
+          typeName={rep.typeName}
+        />
+        {renderFoldYearRows(group)}
+      </div>
+    );
+  };
+
+
+    const getSearchResultUrl = (params: {
     title: string;
     year?: string;
     type?: string;
@@ -958,6 +1163,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     source?: string;
     id?: string;
     query?: string;
+    onBeforeNavigate?: () => void;
   }) => {
     const yearText = item.year && item.year !== 'unknown' ? item.year : '';
     const sourceTags = item.isAggregate
@@ -990,6 +1196,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
         key={item.key}
         type='button'
         onClick={() => {
+          item.onBeforeNavigate?.();
           saveSearchPositionForPlayback();
           router.push(itemUrl);
         }}
@@ -2045,7 +2252,23 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                         <div className='absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform peer-checked:translate-x-4'></div>
                       </div>
                     </label>
-                    <label className='flex cursor-pointer select-none items-center justify-between gap-3 rounded-lg px-1 py-2'>
+                                        <label className='flex cursor-pointer select-none items-center justify-between gap-3 rounded-lg px-1 py-2'>
+                      <span className='text-sm text-gray-700 dark:text-gray-300'>
+                        同标题折叠
+                      </span>
+                      <div className='relative'>
+                        <input
+                          type='checkbox'
+                          className='peer sr-only'
+                          checked={titleFoldEnabled}
+                          disabled={viewMode !== 'agg'}
+                          onChange={() => setTitleFoldEnabled((v) => !v)}
+                        />
+                        <div className={`h-5 w-9 rounded-full transition-colors peer-checked:bg-green-500 dark:bg-gray-600 ${viewMode !== 'agg' ? 'bg-gray-200 opacity-60' : 'bg-gray-300'}`}></div>
+                        <div className='absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform peer-checked:translate-x-4'></div>
+                      </div>
+                    </label>
+<label className='flex cursor-pointer select-none items-center justify-between gap-3 rounded-lg px-1 py-2'>
                       <span className='text-sm text-gray-700 dark:text-gray-300'>
                         前端过滤
                       </span>
@@ -2299,7 +2522,23 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                               <div className='absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform peer-checked:translate-x-4'></div>
                             </div>
                           </label>
-                          <label className='flex cursor-pointer select-none items-center justify-between gap-3 rounded-lg px-1 py-2'>
+                                              <label className='flex cursor-pointer select-none items-center justify-between gap-3 rounded-lg px-1 py-2'>
+                      <span className='text-sm text-gray-700 dark:text-gray-300'>
+                        同标题折叠
+                      </span>
+                      <div className='relative'>
+                        <input
+                          type='checkbox'
+                          className='peer sr-only'
+                          checked={titleFoldEnabled}
+                          disabled={viewMode !== 'agg'}
+                          onChange={() => setTitleFoldEnabled((v) => !v)}
+                        />
+                        <div className={`h-5 w-9 rounded-full transition-colors peer-checked:bg-green-500 dark:bg-gray-600 ${viewMode !== 'agg' ? 'bg-gray-200 opacity-60' : 'bg-gray-300'}`}></div>
+                        <div className='absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform peer-checked:translate-x-4'></div>
+                      </div>
+                    </label>
+<label className='flex cursor-pointer select-none items-center justify-between gap-3 rounded-lg px-1 py-2'>
                             <span className='text-sm text-gray-700 dark:text-gray-300'>
                               前端过滤
                             </span>
@@ -2389,7 +2628,11 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
 
                       const resultChildren =
                         viewMode === 'agg'
-                          ? filteredAggResults.map(([mapKey, group]) => {
+                          ? foldedAggResults
+                            ? foldedAggResults.map((foldGroup) =>
+                                renderFoldCard(foldGroup)
+                              )
+                            : filteredAggResults.map(([mapKey, group]) => {
                               const title = group[0]?.title || '';
                               const poster = group[0]?.poster || '';
                               const year = group[0]?.year || 'unknown';

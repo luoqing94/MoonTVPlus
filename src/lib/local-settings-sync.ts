@@ -12,8 +12,10 @@ export const LOCAL_SETTINGS_SYNC_LAST_PULL_KEY = 'moontv_local_settings_sync_las
 // 本地设置面板同步白名单（键 = localStorage 中存储的 key）
 export const LOCAL_SETTINGS_KEYS: string[] = [
   'defaultAggregateSearch',
+  'titleFoldEnabled',
   'saveLivePlayRecords',
   'enableOptimization',
+  'enableBackgroundProbe',
   'preferStrategy',
   'preferMode',
   'speedTestTimeout',

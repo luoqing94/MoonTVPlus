@@ -46,6 +46,10 @@ import {
   LOCAL_SETTINGS_SYNC_LAST_PULL_KEY,
   type LocalSettingsPayload,
 } from '@/lib/local-settings-sync';
+import {
+  ENABLE_BACKGROUND_PROBE_KEY,
+  TITLE_FOLD_ENABLED_KEY,
+} from '@/lib/prefer-probe-cache';
 import { clearBangumiImageFallbackCache } from '@/lib/utils';
 import { CURRENT_VERSION } from '@/lib/version';
 import { UpdateStatus } from '@/lib/version_check';
@@ -170,6 +174,7 @@ export const UserMenu: React.FC = () => {
   const [saveLivePlayRecords, setSaveLivePlayRecords] = useState(false);
   const [doubanProxyUrl, setDoubanProxyUrl] = useState('');
   const [enableOptimization, setEnableOptimization] = useState(true);
+  const [enableBackgroundProbe, setEnableBackgroundProbe] = useState(true);
   const [preferStrategy, setPreferStrategy] = useState<'fast' | 'full'>('fast');
   const [preferMode, setPreferMode] = useState<
     'balanced' | 'resolution' | 'speed'
@@ -736,6 +741,17 @@ export const UserMenu: React.FC = () => {
         localStorage.getItem('enableOptimization');
       if (savedEnableOptimization !== null) {
         setEnableOptimization(JSON.parse(savedEnableOptimization));
+      }
+
+      const savedBackgroundProbe = localStorage.getItem(
+        ENABLE_BACKGROUND_PROBE_KEY
+      );
+      if (savedBackgroundProbe !== null) {
+        try {
+          setEnableBackgroundProbe(JSON.parse(savedBackgroundProbe));
+        } catch {
+          setEnableBackgroundProbe(savedBackgroundProbe === 'true');
+        }
       }
 
       const savedPreferStrategy = localStorage.getItem('preferStrategy');
@@ -1730,6 +1746,16 @@ export const UserMenu: React.FC = () => {
     }
   };
 
+  const handleBackgroundProbeToggle = (value: boolean) => {
+    setEnableBackgroundProbe(value);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(
+        ENABLE_BACKGROUND_PROBE_KEY,
+        JSON.stringify(value)
+      );
+    }
+  };
+
   const handlePreferStrategyChange = (value: 'fast' | 'full') => {
     setPreferStrategy(value);
     if (typeof window !== 'undefined') {
@@ -2204,6 +2230,7 @@ export const UserMenu: React.FC = () => {
     const defaultAnimeImageBaseUrl = '';
 
     setDefaultAggregateSearch(true);
+    setEnableBackgroundProbe(true);
     setSaveLivePlayRecords(false);
     setEnableOptimization(true);
     setPreferStrategy('fast');
@@ -2245,6 +2272,8 @@ export const UserMenu: React.FC = () => {
       localStorage.setItem('defaultAggregateSearch', JSON.stringify(true));
       localStorage.setItem(SAVE_LIVE_PLAY_RECORDS_KEY, 'false');
       localStorage.setItem('enableOptimization', JSON.stringify(true));
+      localStorage.setItem(ENABLE_BACKGROUND_PROBE_KEY, JSON.stringify(true));
+      localStorage.setItem(TITLE_FOLD_ENABLED_KEY, JSON.stringify(true));
       localStorage.setItem('preferStrategy', 'fast');
       localStorage.setItem('preferMode', 'balanced');
       localStorage.setItem('fluidSearch', JSON.stringify(defaultFluidSearch));
@@ -2356,6 +2385,11 @@ export const UserMenu: React.FC = () => {
         break;
       case 'enableOptimization':
         setEnableOptimization(true);
+        break;
+      case 'enableBackgroundProbe':
+        setEnableBackgroundProbe(true);
+        break;
+      case 'titleFoldEnabled':
         break;
       case 'preferStrategy':
         setPreferStrategy('fast');
@@ -2515,6 +2549,11 @@ export const UserMenu: React.FC = () => {
           break;
         case 'enableOptimization':
           setEnableOptimization(value === 'true');
+          break;
+        case 'enableBackgroundProbe':
+          setEnableBackgroundProbe(value === 'true');
+          break;
+        case 'titleFoldEnabled':
           break;
         case 'preferStrategy':
           setPreferStrategy(value === 'full' ? 'full' : 'fast');
@@ -3951,6 +3990,31 @@ export const UserMenu: React.FC = () => {
                   {/* 测速超时设置 */}
                   {enableOptimization && (
                     <div className='ml-4 mt-2 space-y-2'>
+                      <div className='flex items-center justify-between'>
+                        <div>
+                          <h4 className='text-sm font-medium text-gray-700 dark:text-gray-300'>
+                            播放后后台探针
+                          </h4>
+                          <p className='text-xs text-gray-500 dark:text-gray-400 mt-1'>
+                            开播后低并发测同标题其它源，写入本次标签页缓存；不自动切正在播的源
+                          </p>
+                        </div>
+                        <label className='flex items-center cursor-pointer'>
+                          <div className='relative'>
+                            <input
+                              type='checkbox'
+                              className='sr-only peer'
+                              checked={enableBackgroundProbe}
+                              onChange={(e) =>
+                                handleBackgroundProbeToggle(e.target.checked)
+                              }
+                            />
+                            <div className='w-11 h-6 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors dark:bg-gray-600'></div>
+                            <div className='absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform peer-checked:translate-x-5'></div>
+                          </div>
+                        </label>
+                      </div>
+
                       <div className='space-y-2'>
                         <div className='flex items-center justify-between gap-3'>
                           <span className='flex items-center gap-1 text-xs text-gray-600 dark:text-gray-400'>
