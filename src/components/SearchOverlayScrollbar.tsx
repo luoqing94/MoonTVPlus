@@ -11,15 +11,17 @@ type SearchOverlayScrollbarProps = {
   enabled?: boolean;
 };
 
-const HIDE_DELAY_MS = 1000;
-const MIN_THUMB_PX = 32;
+const HIDE_DELAY_MS = 1200;
+const MIN_THUMB_PX = 36;
 const TRACK_TOP = 72;
 const TRACK_BOTTOM = 96;
 
 /**
- * Desktop overlay scrollbar for the search page (body is the scroll root).
- * Hidden by default; fades in on results-area hover or while scrolling;
- * supports thumb drag and track click. Mobile unchanged (md+ only).
+ * Overlay scrollbar for the search page (body is the scroll root).
+ * Hidden by default; fades in on results-area hover (desktop), while
+ * scrolling, or on touch; supports thumb drag and track click/tap on
+ * both mobile and desktop. Thin visual thumb with a wider touch hit area
+ * on small screens.
  */
 export default function SearchOverlayScrollbar({
   hoverTargetRef,
@@ -125,8 +127,14 @@ export default function SearchOverlayScrollbar({
       keepVisibleRef.current = false;
       scheduleHide();
     };
+    // Touch: briefly reveal when interacting with the results area.
+    const onTouchStart = () => {
+      recompute();
+      reveal();
+    };
     target?.addEventListener('mouseenter', onEnter);
     target?.addEventListener('mouseleave', onLeave);
+    target?.addEventListener('touchstart', onTouchStart, { passive: true });
 
     const ro =
       typeof ResizeObserver !== 'undefined'
@@ -142,6 +150,7 @@ export default function SearchOverlayScrollbar({
       window.removeEventListener('resize', onResize);
       target?.removeEventListener('mouseenter', onEnter);
       target?.removeEventListener('mouseleave', onLeave);
+      target?.removeEventListener('touchstart', onTouchStart);
       ro?.disconnect();
       clearHideTimer();
     };
@@ -187,19 +196,32 @@ export default function SearchOverlayScrollbar({
     clearHideTimer();
     setVisible(true);
 
+    try {
+      track.setPointerCapture(event.pointerId);
+    } catch {
+      // ignore capture failures on older browsers
+    }
+
     const onMove = (ev: PointerEvent) => {
       if (!draggingRef.current || !trackRef.current) return;
       const r = trackRef.current.getBoundingClientRect();
       scrollFromThumbTop(ev.clientY - r.top - dragOffsetRef.current);
     };
-    const onUp = () => {
+    const onUp = (ev: PointerEvent) => {
       draggingRef.current = false;
+      try {
+        track.releasePointerCapture(ev.pointerId);
+      } catch {
+        // ignore
+      }
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
       scheduleHide();
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
   };
 
   if (!enabled || !canScroll) return null;
@@ -207,7 +229,7 @@ export default function SearchOverlayScrollbar({
   return (
     <div
       ref={trackRef}
-      className={`fixed right-1.5 z-[400] hidden w-2 md:block ${
+      className={`fixed right-0 z-[400] w-5 touch-none md:right-1.5 md:w-2 ${
         visible ? 'pointer-events-auto' : 'pointer-events-none'
       }`}
       style={{ top: TRACK_TOP, bottom: TRACK_BOTTOM }}
@@ -223,8 +245,9 @@ export default function SearchOverlayScrollbar({
       onPointerDown={onTrackPointerDown}
       aria-hidden={!visible}
     >
+      {/* Visual thumb: inset on mobile so the hit area (w-5) is wider than the bar */}
       <div
-        className={`absolute left-0 right-0 rounded-full bg-gray-400/55 shadow-sm transition-opacity duration-200 hover:bg-green-500/75 dark:bg-gray-500/50 dark:hover:bg-green-400/75 ${
+        className={`absolute rounded-full bg-gray-400/60 shadow-sm transition-opacity duration-200 active:bg-green-500/80 hover:bg-green-500/75 dark:bg-gray-500/55 dark:active:bg-green-400/80 dark:hover:bg-green-400/75 left-1.5 right-1.5 md:left-0 md:right-0 ${
           visible ? 'opacity-100' : 'opacity-0'
         }`}
         style={{
