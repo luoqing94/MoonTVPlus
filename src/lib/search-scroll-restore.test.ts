@@ -2,16 +2,39 @@ import {
   consumeSearchScroll,
   getPageScrollTop,
   getSearchScrollKey,
+  isIOSLikeScrollEnvironment,
   saveSearchScroll,
   scrollPageTo,
 } from './search-scroll-restore';
 
 describe('search page scroll restore', () => {
+  const originalUserAgent = navigator.userAgent;
+  const originalMaxTouchPoints = navigator.maxTouchPoints;
+
   beforeEach(() => {
     sessionStorage.clear();
     document.body.scrollTop = 0;
     document.documentElement.scrollTop = 0;
     window.scrollTo = jest.fn();
+    Object.defineProperty(navigator, 'userAgent', {
+      configurable: true,
+      get: () => originalUserAgent,
+    });
+    Object.defineProperty(navigator, 'maxTouchPoints', {
+      configurable: true,
+      get: () => originalMaxTouchPoints,
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(navigator, 'userAgent', {
+      configurable: true,
+      get: () => originalUserAgent,
+    });
+    Object.defineProperty(navigator, 'maxTouchPoints', {
+      configurable: true,
+      get: () => originalMaxTouchPoints,
+    });
   });
 
   it('keys scroll independently from the result cache, including query suffixes', () => {
@@ -72,5 +95,24 @@ describe('search page scroll restore', () => {
     scrollPageTo(1280);
     expect(document.body.scrollTop).toBe(1280);
     expect(document.documentElement.scrollTop).toBe(1280);
+    expect(window.scrollTo).toHaveBeenCalledWith(0, 1280);
+  });
+
+  it('on iOS uses a single window.scrollTo writer and does not dual-write body/html', () => {
+    Object.defineProperty(navigator, 'userAgent', {
+      configurable: true,
+      get: () =>
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+    });
+    expect(isIOSLikeScrollEnvironment()).toBe(true);
+
+    document.body.scrollTop = 10;
+    document.documentElement.scrollTop = 20;
+    scrollPageTo(1280);
+
+    expect(window.scrollTo).toHaveBeenCalledWith(0, 1280);
+    // Must not also assign body/html — that desyncs iOS fixed hit targets.
+    expect(document.body.scrollTop).toBe(10);
+    expect(document.documentElement.scrollTop).toBe(20);
   });
 });

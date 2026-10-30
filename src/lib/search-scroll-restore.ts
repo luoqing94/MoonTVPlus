@@ -62,8 +62,35 @@ export function getPageScrollTop(): number {
   );
 }
 
+/**
+ * True for iPhone/iPod/iPad (incl. iPadOS desktop UA with touch).
+ * Dual body+html+window scroll writes desync visual vs layout viewport there.
+ */
+export function isIOSLikeScrollEnvironment(): boolean {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+    return false;
+  }
+  const ua = navigator.userAgent || '';
+  if (/iPad|iPhone|iPod/i.test(ua)) return true;
+  // iPadOS 13+ may report as Macintosh with touch.
+  if (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1) return true;
+  return false;
+}
+
 export function scrollPageTo(top: number): void {
   if (typeof window === 'undefined' || !Number.isFinite(top) || top < 0) return;
+
+  // iOS Safari: a single writer avoids fixed-layer hit-target desync after
+  // frequent search → play → back scroll restores.
+  if (isIOSLikeScrollEnvironment()) {
+    try {
+      window.scrollTo(0, top);
+    } catch {
+      // jsdom does not implement window.scrollTo.
+    }
+    return;
+  }
+
   document.body.scrollTop = top;
   document.documentElement.scrollTop = top;
   try {

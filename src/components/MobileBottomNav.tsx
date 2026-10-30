@@ -9,6 +9,14 @@ import { useEffect, useState } from 'react';
 
 import { useWatchRoomContextSafe } from './WatchRoomProvider';
 
+/** Distance from layout viewport bottom to visual viewport bottom (iOS chrome). */
+function readVisualBottomInset(): number {
+  if (typeof window === 'undefined') return 0;
+  const vv = window.visualViewport;
+  if (!vv) return 0;
+  return Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+}
+
 interface MobileBottomNavProps {
   /**
    * 主动指定当前激活的路径。当未提供时，自动使用 usePathname() 获取的路径。
@@ -27,10 +35,6 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
     return queryString ? `${pathname}?${queryString}` : pathname;
   };
   const currentActive = activePath ?? getCurrentFullPath();
-
-  if (pathname === '/watch-room/screen') {
-    return null;
-  }
 
   const [navItems, setNavItems] = useState([
     { icon: Home, label: '首页', href: '/' },
@@ -60,6 +64,23 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
         href: '/live',
       },
   ]);
+  // Keep fixed bottom nav pinned to the visual viewport (same idea as SearchOverlayScrollbar)
+  // so frequent search→play→back + Safari chrome changes do not leave hit targets mid-screen.
+  const [visualBottomInset, setVisualBottomInset] = useState(0);
+
+  useEffect(() => {
+    const updateInset = () => setVisualBottomInset(readVisualBottomInset());
+    updateInset();
+    window.addEventListener('resize', updateInset);
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', updateInset);
+    vv?.addEventListener('scroll', updateInset);
+    return () => {
+      window.removeEventListener('resize', updateInset);
+      vv?.removeEventListener('resize', updateInset);
+      vv?.removeEventListener('scroll', updateInset);
+    };
+  }, []);
 
   useEffect(() => {
     const runtimeConfig = (window as any).RUNTIME_CONFIG;
@@ -161,12 +182,16 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
     );
   };
 
+  if (pathname === '/watch-room/screen') {
+    return null;
+  }
+
   return (
     <nav
       className='md:hidden fixed left-0 right-0 z-[600] bg-white/90 backdrop-blur-xl border-t border-gray-200/50 overflow-hidden dark:bg-gray-900/80 dark:border-gray-700/50'
       style={{
-        /* 紧贴视口底部，同时在内部留出安全区高度 */
-        bottom: 0,
+        /* Pin to visual viewport bottom (iOS); fall back to layout bottom when inset is 0 */
+        bottom: visualBottomInset,
         paddingBottom: 'env(safe-area-inset-bottom)',
         minHeight: 'calc(3.5rem + env(safe-area-inset-bottom))',
       }}

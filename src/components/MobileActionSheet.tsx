@@ -3,6 +3,8 @@ import Image from 'next/image';
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
+import { acquireBodyScrollLock } from '@/lib/body-scroll-lock';
+
 export interface ActionItem {
   id: string;
   label: string;
@@ -66,8 +68,9 @@ const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
 
   // 控制动画状态
   useEffect(() => {
-    let animationId: number;
-    let timer: NodeJS.Timeout;
+    let animationId = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let closing = false;
 
     if (isOpen) {
       backdropPressStarted.current = false;
@@ -79,6 +82,7 @@ const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
         });
       });
     } else {
+      closing = true;
       backdropPressStarted.current = false;
       setIsAnimating(false);
       // 等待动画完成后隐藏组件
@@ -94,57 +98,19 @@ const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
       if (timer) {
         clearTimeout(timer);
       }
+      // If close animation is interrupted (re-open, unmount, Strict Mode),
+      // force fully hidden so a half-closed overlay cannot keep blocking taps.
+      if (closing) {
+        setIsAnimating(false);
+        setIsVisible(false);
+      }
     };
   }, [isOpen]);
 
-  // 阻止背景滚动
+  // 阻止背景滚动（引用计数，避免嵌套/连关后 body 残留 position:fixed）
   useEffect(() => {
-    if (isVisible) {
-      // 保存当前滚动位置
-      const scrollY = window.scrollY;
-      const scrollX = window.scrollX;
-      const body = document.body;
-      const html = document.documentElement;
-
-      // 获取滚动条宽度
-      const scrollBarWidth = window.innerWidth - html.clientWidth;
-
-      // 保存原始样式
-      const originalBodyStyle = {
-        position: body.style.position,
-        top: body.style.top,
-        left: body.style.left,
-        right: body.style.right,
-        width: body.style.width,
-        paddingRight: body.style.paddingRight,
-        overflow: body.style.overflow,
-      };
-
-      // 设置body样式来阻止滚动，但保持原位置
-      body.style.position = 'fixed';
-      body.style.top = `-${scrollY}px`;
-      body.style.left = `-${scrollX}px`;
-      body.style.right = '0';
-      body.style.width = '100%';
-      body.style.overflow = 'hidden';
-      body.style.paddingRight = `${scrollBarWidth}px`;
-
-      return () => {
-        // 恢复所有原始样式
-        body.style.position = originalBodyStyle.position;
-        body.style.top = originalBodyStyle.top;
-        body.style.left = originalBodyStyle.left;
-        body.style.right = originalBodyStyle.right;
-        body.style.width = originalBodyStyle.width;
-        body.style.paddingRight = originalBodyStyle.paddingRight;
-        body.style.overflow = originalBodyStyle.overflow;
-
-        // 使用 requestAnimationFrame 确保样式恢复后再滚动
-        requestAnimationFrame(() => {
-          window.scrollTo(scrollX, scrollY);
-        });
-      };
-    }
+    if (!isVisible) return;
+    return acquireBodyScrollLock();
   }, [isVisible]);
 
   useEffect(() => {
@@ -253,9 +219,15 @@ const MobileActionSheet: React.FC<MobileActionSheetProps> = ({
     onClose();
   };
 
+  // Immediate non-interactive while closing or before open animation finishes,
+  // so a fading overlay cannot steal taps from the page underneath.
+  const sheetInteractive = isOpen && isAnimating;
+
   const content = (
     <div
-      className="fixed inset-0 z-[9999] flex items-end justify-center"
+      className={`fixed inset-0 z-[9999] flex items-end justify-center ${
+        sheetInteractive ? 'pointer-events-auto' : 'pointer-events-none'
+      }`}
       onTouchMove={(e) => {
         // 阻止最外层容器的触摸移动，防止背景滚动
         e.preventDefault();
