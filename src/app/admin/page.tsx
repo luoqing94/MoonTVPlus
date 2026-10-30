@@ -11700,7 +11700,7 @@ const SiteConfigComponent = ({
           className='w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-green-500 focus:border-transparent'
         />
         <p className='mt-1 text-xs text-gray-500 dark:text-gray-400'>
-          每个影视源最多拉取几页结果，默认 1 页（更快；需要更多结果时再调高）
+          点击搜索时每个影视源首轮拉取几页，默认 1 页（更快）。不影响结果页底部「加载更多」，后者按源站实际分页继续拉。
         </p>
       </div>
 

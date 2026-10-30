@@ -24,9 +24,16 @@ export type SearchFromApiOptions = {
   signal?: AbortSignal;
   /** First CMS page to fetch (1-based). Default 1. */
   startPage?: number;
-  /** How many pages to fetch in this call. Default = SiteConfig.SearchDownstreamMaxPage. */
+  /**
+   * How many pages to fetch in this call.
+   * Default = SiteConfig.SearchDownstreamMaxPage (initial-search volume only).
+   * Load-more callers should pass 1; admin max does not cap later pages.
+   */
   maxPages?: number;
 };
+
+/** Hard ceiling against abusive pagination (not the admin SiteConfig max). */
+export const SEARCH_PAGE_HARD_CEILING = 100;
 
 export type SearchFromApiOutcome = {
   results: SearchResult[];
@@ -34,7 +41,7 @@ export type SearchFromApiOutcome = {
   page: number;
   /** Total pages reported by the CMS (best effort). */
   pageCount: number;
-  /** True when more pages remain under the admin absolute cap. */
+  /** True when the CMS reports more pages after the last fetched page. */
   hasMore: boolean;
 };
 
@@ -261,7 +268,9 @@ export async function searchFromApi(
     }
 
     const config = await getConfig();
-    const absoluteMax = Math.max(
+    // Admin max pages only sets the *default* pages fetched in one call
+    // (initial search). It must NOT gate hasMore or block load-more pages.
+    const adminInitialPages = Math.max(
       1,
       Number(config.SiteConfig.SearchDownstreamMaxPage) || 1
     );
@@ -270,11 +279,18 @@ export async function searchFromApi(
       1000;
 
     const startPage = Math.max(1, opts.startPage ?? 1);
-    const pagesInCall = Math.max(1, opts.maxPages ?? absoluteMax);
-    const endPage = Math.min(startPage + pagesInCall - 1, absoluteMax);
+    const pagesInCall = Math.max(1, opts.maxPages ?? adminInitialPages);
+    const endPage = Math.min(
+      startPage + pagesInCall - 1,
+      SEARCH_PAGE_HARD_CEILING
+    );
 
-    if (startPage > absoluteMax) {
-      return { ...empty, page: absoluteMax, pageCount: absoluteMax };
+    if (startPage > SEARCH_PAGE_HARD_CEILING) {
+      return {
+        ...empty,
+        page: SEARCH_PAGE_HARD_CEILING,
+        pageCount: SEARCH_PAGE_HARD_CEILING,
+      };
     }
 
     const apiBaseUrl = apiSite.api;
@@ -330,7 +346,9 @@ export async function searchFromApi(
       lastFetchedPage = startPage;
     }
 
-    const hasMore = lastFetchedPage < pageCount && lastFetchedPage < absoluteMax;
+    const hasMore =
+      lastFetchedPage < pageCount &&
+      lastFetchedPage < SEARCH_PAGE_HARD_CEILING;
 
     return {
       results: allResults,

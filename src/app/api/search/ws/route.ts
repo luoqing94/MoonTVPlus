@@ -379,7 +379,7 @@ export async function GET(request: NextRequest) {
           });
       }
 
-      // 为每个源创建搜索 Promise（首搜只拉第 1 页；超时/断开真正 abort）
+      // 为首搜拉取后台「搜索最大页数」页；后续翻页走 /api/search/more（不受该上限约束）
       const searchPromises = sortedApiSites.map(async (site) => {
         const sourceAbort = new AbortController();
         const timeoutId = setTimeout(() => sourceAbort.abort(), sourceTimeoutMs);
@@ -394,7 +394,7 @@ export async function GET(request: NextRequest) {
           const outcome = await searchFromApi(site, head, {
             signal: sourceAbort.signal,
             startPage: 1,
-            maxPages: 1,
+            maxPages: maxPagesCap,
           });
 
           const results = Array.isArray(outcome?.results) ? outcome.results : [];

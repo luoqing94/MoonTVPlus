@@ -157,7 +157,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
   const sourcePageMetaRef = useRef<Map<string, SourcePageMeta>>(new Map());
   const [hasMorePages, setHasMorePages] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [searchMaxPages, setSearchMaxPages] = useState(1);
+  const [, setSearchMaxPages] = useState(1);
   const searchMaxPagesRef = useRef(1);
   const hasMorePagesRef = useRef(false);
   const loadMoreAbortRef = useRef<AbortController | null>(null);
@@ -1728,17 +1728,16 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                 if (payload.source) {
                   const page = Number(payload.page) || 1;
                   const pageCount = Number(payload.pageCount) || page;
+                  // hasMore follows CMS pageCount only — not admin maxPages
                   const hasMore = Boolean(payload.hasMore);
-                  const cappedHasMore =
-                    hasMore && page < searchMaxPagesRef.current;
                   sourcePageMetaRef.current.set(String(payload.source), {
                     page,
                     pageCount,
-                    hasMore: cappedHasMore,
+                    hasMore,
                   });
                   updateHasMorePages(
                     Array.from(sourcePageMetaRef.current.values()).some(
-                      (m) => m.hasMore && m.page < searchMaxPagesRef.current
+                      (m) => m.hasMore
                     )
                   );
                 }
@@ -1779,7 +1778,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                   });
                   updateHasMorePages(
                     Array.from(sourcePageMetaRef.current.values()).some(
-                      (m) => m.hasMore && m.page < searchMaxPagesRef.current
+                      (m) => m.hasMore
                     )
                   );
                 }
@@ -1974,11 +1973,11 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     const trimmed = currentQueryRef.current.trim();
     if (!trimmed || isLoading || isLoadingMore) return;
 
-    const maxPagesCap = searchMaxPagesRef.current;
+    // Load-more is driven only by per-source CMS hasMore (page < pageCount).
+    // Admin SearchDownstreamMaxPage does not cap further pages.
     const nextSources = Array.from(sourcePageMetaRef.current.entries())
-      .filter(([, meta]) => meta.hasMore && meta.page < maxPagesCap)
-      .map(([key, meta]) => ({ key, page: meta.page + 1 }))
-      .filter((s) => s.page <= maxPagesCap);
+      .filter(([, meta]) => meta.hasMore)
+      .map(([key, meta]) => ({ key, page: meta.page + 1 }));
 
     if (nextSources.length === 0) {
       updateHasMorePages(false);
@@ -2022,14 +2021,11 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
           sourcePageMetaRef.current.set(String(src.key), {
             page: nextPage,
             pageCount: Number(src.pageCount) || 1,
-            hasMore:
-              Boolean(src.hasMore) && nextPage < searchMaxPagesRef.current,
+            hasMore: Boolean(src.hasMore),
           });
         }
         updateHasMorePages(
-          Array.from(sourcePageMetaRef.current.values()).some(
-            (m) => m.hasMore && m.page < searchMaxPagesRef.current
-          )
+          Array.from(sourcePageMetaRef.current.values()).some((m) => m.hasMore)
         );
       } else {
         updateHasMorePages(Boolean(data.hasMore));
@@ -3068,13 +3064,6 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                         >
                           刷新以加载更多
                         </button>
-                      ) : searchMaxPages <= 1 ? (
-                        <span className='text-center text-sm text-gray-400 dark:text-gray-500'>
-                          已达最大页数
-                          <span className='mt-0.5 block text-xs text-gray-400/80 dark:text-gray-600'>
-                            管理员可在站点设置提高「搜索下游最大页数」
-                          </span>
-                        </span>
                       ) : (
                         <span className='text-sm text-gray-400 dark:text-gray-500'>
                           没有更多了

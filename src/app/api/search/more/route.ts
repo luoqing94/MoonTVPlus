@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie } from '@/lib/auth';
 import { getAvailableApiSites, getConfig } from '@/lib/config';
-import { searchFromApi } from '@/lib/downstream';
+import { SEARCH_PAGE_HARD_CEILING, searchFromApi } from '@/lib/downstream';
 import { filterMoviesByRestTokens, splitQuery } from '@/lib/search-query';
 import { yellowWords } from '@/lib/yellow';
 
@@ -65,11 +65,7 @@ export async function POST(request: NextRequest) {
   const sourceTimeoutMs =
     Math.max(1, Number(config.SiteConfig.SearchSourceTimeoutSeconds) || 8) *
     1000;
-  const absoluteMax = Math.max(
-    1,
-    Number(config.SiteConfig.SearchDownstreamMaxPage) || 1
-  );
-
+  // Admin SearchDownstreamMaxPage does NOT cap load-more; only a hard abuse ceiling.
   if (privateOnly) {
     return NextResponse.json({
       results: [],
@@ -109,11 +105,11 @@ export async function POST(request: NextRequest) {
             error: 'source not found',
           };
         }
-        if (req.page > absoluteMax) {
+        if (req.page > SEARCH_PAGE_HARD_CEILING) {
           return {
             key: req.key,
-            page: absoluteMax,
-            pageCount: absoluteMax,
+            page: SEARCH_PAGE_HARD_CEILING,
+            pageCount: SEARCH_PAGE_HARD_CEILING,
             hasMore: false,
             results: [] as any[],
           };
