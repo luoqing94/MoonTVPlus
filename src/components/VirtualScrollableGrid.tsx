@@ -290,7 +290,7 @@ export default function VirtualScrollableGrid({
   const bottomSpacerHeight = Math.max(0, (totalRows - range.endRow - 1) * rowHeight);
 
   return (
-    <div ref={containerRef} className='relative w-full'>
+    <div ref={containerRef} data-search-results className='relative w-full'>
       {/* hidden measuring row (first visible row) */}
       <div
         className='pointer-events-none absolute left-0 top-0 -z-10 w-full opacity-0'

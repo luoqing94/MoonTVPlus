@@ -75,6 +75,17 @@ import SearchSuggestions from '@/components/SearchSuggestions';
 import VideoCard, { VideoCardHandle } from '@/components/VideoCard';
 import SearchOverlayScrollbar from '@/components/SearchOverlayScrollbar';
 import VirtualScrollableGrid from '@/components/VirtualScrollableGrid';
+import {
+  AUTO_LOAD_MORE_REMAINING_THRESHOLD_DEFAULT,
+  AUTO_LOAD_MORE_THRESHOLD_MAX,
+  AUTO_LOAD_MORE_THRESHOLD_MIN,
+  SEARCH_AUTO_LOAD_MORE_EVENT,
+  estimateRemainingLoadedItems,
+  getSearchAutoLoadMoreThreshold,
+  isSearchAutoLoadMoreEnabled,
+  setSearchAutoLoadMoreEnabled,
+  setSearchAutoLoadMoreThreshold,
+} from '@/lib/search-auto-load-more';
 
 const PANSOU_CLOUD_TYPE_OPTIONS = Object.entries(CLOUD_TYPE_NAMES).map(
   ([value, label]) => ({ value, label })
@@ -161,6 +172,19 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
   const searchMaxPagesRef = useRef(1);
   const hasMorePagesRef = useRef(false);
   const loadMoreAbortRef = useRef<AbortController | null>(null);
+  const isLoadingRef = useRef(false);
+  const isLoadingMoreRef = useRef(false);
+  const handleLoadMoreRef = useRef<() => Promise<void>>(async () => {});
+  const autoLoadMoreThresholdRef = useRef(
+    AUTO_LOAD_MORE_REMAINING_THRESHOLD_DEFAULT
+  );
+  const lastAutoLoadAtRef = useRef(0);
+  const autoLoadTimerRef = useRef<number | null>(null);
+  const [autoLoadMore, setAutoLoadMore] = useState(true);
+  const [autoLoadMoreThreshold, setAutoLoadMoreThreshold] = useState(
+    AUTO_LOAD_MORE_REMAINING_THRESHOLD_DEFAULT
+  );
+  const autoLoadMoreLoadedRef = useRef(false);
   const pendingResultsRef = useRef<SearchResult[]>([]);
   const flushTimerRef = useRef<number | null>(null);
   const [useFluidSearch, setUseFluidSearch] = useState(true);
@@ -992,6 +1016,56 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
       JSON.stringify(titleFoldEnabled)
     );
   }, [titleFoldEnabled]);
+
+  // 自动加载更多：默认开；阈值 N 默认 10，均持久化
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setAutoLoadMore(isSearchAutoLoadMoreEnabled());
+    const n = getSearchAutoLoadMoreThreshold();
+    setAutoLoadMoreThreshold(n);
+    autoLoadMoreThresholdRef.current = n;
+    autoLoadMoreLoadedRef.current = true;
+
+    const syncFromStorage = () => {
+      setAutoLoadMore(isSearchAutoLoadMoreEnabled());
+      const next = getSearchAutoLoadMoreThreshold();
+      setAutoLoadMoreThreshold(next);
+      autoLoadMoreThresholdRef.current = next;
+    };
+    const onStorage = (e: StorageEvent) => {
+      if (
+        e.key === 'searchAutoLoadMore' ||
+        e.key === 'searchAutoLoadMoreThreshold'
+      ) {
+        syncFromStorage();
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    window.addEventListener(SEARCH_AUTO_LOAD_MORE_EVENT, syncFromStorage);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener(SEARCH_AUTO_LOAD_MORE_EVENT, syncFromStorage);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !autoLoadMoreLoadedRef.current) return;
+    setSearchAutoLoadMoreEnabled(autoLoadMore);
+  }, [autoLoadMore]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !autoLoadMoreLoadedRef.current) return;
+    setSearchAutoLoadMoreThreshold(autoLoadMoreThreshold);
+    autoLoadMoreThresholdRef.current = autoLoadMoreThreshold;
+  }, [autoLoadMoreThreshold]);
+
+  useEffect(() => {
+    isLoadingRef.current = isLoading;
+  }, [isLoading]);
+
+  useEffect(() => {
+    isLoadingMoreRef.current = isLoadingMore;
+  }, [isLoadingMore]);
 
 
   useEffect(() => {
@@ -1971,7 +2045,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
 
   const handleLoadMore = async () => {
     const trimmed = currentQueryRef.current.trim();
-    if (!trimmed || isLoading || isLoadingMore) return;
+    if (!trimmed || isLoadingRef.current || isLoadingMoreRef.current) return;
 
     // Load-more is driven only by per-source CMS hasMore (page < pageCount).
     // Admin SearchDownstreamMaxPage does not cap further pages.
@@ -2062,6 +2136,78 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
       setIsLoadingMore(false);
     }
   };
+
+  handleLoadMoreRef.current = handleLoadMore;
+
+  // 剩余已加载条目 ≤ N 时自动触发加载更多（可关；N 可调）
+  useEffect(() => {
+    const clearTimer = () => {
+      if (autoLoadTimerRef.current != null) {
+        window.clearTimeout(autoLoadTimerRef.current);
+        autoLoadTimerRef.current = null;
+      }
+    };
+
+    const maybeAutoLoad = () => {
+      if (!autoLoadMore) return;
+      if (!useFluidSearch) return;
+      if (isLoadingRef.current || isLoadingMoreRef.current) return;
+      if (!hasMorePagesRef.current) return;
+      if (!currentQueryRef.current.trim()) return;
+      if (searchResults.length === 0) return;
+
+      const visibleCount = resultCountMeta.visibleCount;
+      if (visibleCount <= 0) return;
+
+      const resultsEl = document.querySelector('[data-search-results]');
+      const remaining = estimateRemainingLoadedItems(visibleCount, resultsEl);
+      const threshold = autoLoadMoreThresholdRef.current;
+      if (remaining > threshold) return;
+
+      const now = Date.now();
+      // 单次在飞 + 最小间隔，避免 tight loop / 连打接口
+      if (now - lastAutoLoadAtRef.current < 450) return;
+      lastAutoLoadAtRef.current = now;
+      void handleLoadMoreRef.current();
+    };
+
+    const schedule = () => {
+      clearTimer();
+      autoLoadTimerRef.current = window.setTimeout(maybeAutoLoad, 180);
+    };
+
+    schedule();
+
+    const onScroll = () => schedule();
+    const bodyEl = document.body;
+    const docEl = document.documentElement;
+    window.addEventListener('scroll', onScroll, { passive: true });
+    bodyEl.addEventListener('scroll', onScroll, { passive: true });
+    docEl.addEventListener('scroll', onScroll, { passive: true });
+    window.visualViewport?.addEventListener('resize', onScroll);
+    window.visualViewport?.addEventListener('scroll', onScroll);
+
+    return () => {
+      clearTimer();
+      window.removeEventListener('scroll', onScroll);
+      bodyEl.removeEventListener('scroll', onScroll);
+      docEl.removeEventListener('scroll', onScroll);
+      window.visualViewport?.removeEventListener('resize', onScroll);
+      window.visualViewport?.removeEventListener('scroll', onScroll);
+    };
+  }, [
+    autoLoadMore,
+    autoLoadMoreThreshold,
+    useFluidSearch,
+    hasMorePages,
+    isLoading,
+    isLoadingMore,
+    searchResults.length,
+    resultCountMeta.visibleCount,
+    viewMode,
+    titleFoldEnabled,
+    resultDisplayMode,
+  ]);
 
   // 输入框内容变化时触发，显示搜索建议
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2463,7 +2609,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                     ref={(el) => {
                       if (el) advancedDropdownRefs.current[0] = el;
                     }}
-                    className='absolute right-0 z-[70] mt-2 w-56 rounded-xl border border-gray-200 bg-white p-3 shadow-lg dark:border-gray-700 dark:bg-gray-900'
+                    className='absolute right-0 z-[70] mt-2 w-64 rounded-xl border border-gray-200 bg-white p-3 shadow-lg dark:border-gray-700 dark:bg-gray-900'
                   >
                     <label className='flex cursor-pointer select-none items-center justify-between gap-3 rounded-lg px-1 py-2'>
                       <span className='text-sm text-gray-700 dark:text-gray-300'>
@@ -2531,6 +2677,48 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                           <div className='absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform peer-checked:translate-x-4'></div>
                         </div>
                       </label>
+                    )}
+                    <label className='flex cursor-pointer select-none items-center justify-between gap-3 rounded-lg px-1 py-2'>
+                      <span className='text-sm text-gray-700 dark:text-gray-300'>
+                        自动加载更多
+                      </span>
+                      <div className='relative'>
+                        <input
+                          type='checkbox'
+                          className='peer sr-only'
+                          checked={autoLoadMore}
+                          onChange={() => setAutoLoadMore((v) => !v)}
+                        />
+                        <div className='h-5 w-9 rounded-full bg-gray-300 transition-colors peer-checked:bg-green-500 dark:bg-gray-600'></div>
+                        <div className='absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform peer-checked:translate-x-4'></div>
+                      </div>
+                    </label>
+                    {autoLoadMore && (
+                      <div className='space-y-1.5 rounded-lg px-1 pb-2 pt-0.5'>
+                        <div className='flex items-center justify-between gap-2'>
+                          <span className='text-xs text-gray-500 dark:text-gray-400'>
+                            剩余 ≤ N 条时加载
+                          </span>
+                          <input
+                            type='number'
+                            min={AUTO_LOAD_MORE_THRESHOLD_MIN}
+                            max={AUTO_LOAD_MORE_THRESHOLD_MAX}
+                            value={autoLoadMoreThreshold}
+                            onChange={(e) => {
+                              const n = Number(e.target.value);
+                              if (!Number.isFinite(n)) return;
+                              setAutoLoadMoreThreshold(
+                                Math.min(
+                                  AUTO_LOAD_MORE_THRESHOLD_MAX,
+                                  Math.max(AUTO_LOAD_MORE_THRESHOLD_MIN, Math.round(n))
+                                )
+                              );
+                            }}
+                            className='w-14 rounded-md border border-gray-200 bg-white px-1.5 py-0.5 text-center text-xs text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200'
+                            aria-label='自动加载剩余条数阈值'
+                          />
+                        </div>
+                      </div>
                     )}
                     <div className='mt-2 border-t border-gray-200 pt-2 dark:border-gray-700'>
                       <span className='px-1 text-sm text-gray-700 dark:text-gray-300'>
@@ -2736,7 +2924,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                           ref={(el) => {
                             if (el) advancedDropdownRefs.current[1] = el;
                           }}
-                          className='absolute right-0 top-full z-[70] mt-2 w-56 rounded-xl border border-gray-200 bg-white p-3 shadow-lg dark:border-gray-700 dark:bg-gray-900'
+                          className='absolute right-0 top-full z-[70] mt-2 w-64 rounded-xl border border-gray-200 bg-white p-3 shadow-lg dark:border-gray-700 dark:bg-gray-900'
                         >
                           <label className='flex cursor-pointer select-none items-center justify-between gap-3 rounded-lg px-1 py-2'>
                             <span className='text-sm text-gray-700 dark:text-gray-300'>
@@ -2804,6 +2992,48 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                                 <div className='absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform peer-checked:translate-x-4'></div>
                               </div>
                             </label>
+                          )}
+                          <label className='flex cursor-pointer select-none items-center justify-between gap-3 rounded-lg px-1 py-2'>
+                            <span className='text-sm text-gray-700 dark:text-gray-300'>
+                              自动加载更多
+                            </span>
+                            <div className='relative'>
+                              <input
+                                type='checkbox'
+                                className='peer sr-only'
+                                checked={autoLoadMore}
+                                onChange={() => setAutoLoadMore((v) => !v)}
+                              />
+                              <div className='h-5 w-9 rounded-full bg-gray-300 transition-colors peer-checked:bg-green-500 dark:bg-gray-600'></div>
+                              <div className='absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform peer-checked:translate-x-4'></div>
+                            </div>
+                          </label>
+                          {autoLoadMore && (
+                            <div className='space-y-1.5 rounded-lg px-1 pb-2 pt-0.5'>
+                              <div className='flex items-center justify-between gap-2'>
+                                <span className='text-xs text-gray-500 dark:text-gray-400'>
+                                  剩余 ≤ N 条时加载
+                                </span>
+                                <input
+                                  type='number'
+                                  min={AUTO_LOAD_MORE_THRESHOLD_MIN}
+                                  max={AUTO_LOAD_MORE_THRESHOLD_MAX}
+                                  value={autoLoadMoreThreshold}
+                                  onChange={(e) => {
+                                    const n = Number(e.target.value);
+                                    if (!Number.isFinite(n)) return;
+                                    setAutoLoadMoreThreshold(
+                                      Math.min(
+                                        AUTO_LOAD_MORE_THRESHOLD_MAX,
+                                        Math.max(AUTO_LOAD_MORE_THRESHOLD_MIN, Math.round(n))
+                                      )
+                                    );
+                                  }}
+                                  className='w-14 rounded-md border border-gray-200 bg-white px-1.5 py-0.5 text-center text-xs text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200'
+                                  aria-label='自动加载剩余条数阈值'
+                                />
+                              </div>
+                            </div>
                           )}
                           <div className='mt-2 border-t border-gray-200 pt-2 dark:border-gray-700'>
                             <span className='px-1 text-sm text-gray-700 dark:text-gray-300'>
@@ -3028,6 +3258,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                       return (
                         <div
                           key={`search-results-${viewMode}-${resultDisplayMode}`}
+                          data-search-results
                           className={
                             resultDisplayMode === 'list'
                               ? listClassName
