@@ -2,14 +2,89 @@
 
 import React, { useMemo, useState } from 'react';
 
+import { exportDownloadTasks } from '@/lib/download-export';
 import { M3U8DownloadTask, M3U8SegmentLogStatus } from '@/lib/m3u8-downloader';
 
 import { useDownload } from '@/contexts/DownloadContext';
+
+function getExportAvailability(task: M3U8DownloadTask): {
+  enabled: boolean;
+  hint: string;
+} {
+  if (task.status === 'downloading') {
+    return { enabled: false, hint: '下载中，完成后可导出' };
+  }
+
+  const mode = task.downloadMode || 'browser';
+  if (mode === 'browser') {
+    return {
+      enabled: false,
+      hint: '浏览器模式无法导出，请改用 IndexedDB 或 File System',
+    };
+  }
+
+  if (!task.source || !task.videoId || task.episodeIndex === undefined) {
+    return { enabled: false, hint: '缺少视频信息，无法导出' };
+  }
+
+  if (task.status === 'done' || task.finishNum > 0) {
+    return { enabled: true, hint: '导出并用其他播放器打开' };
+  }
+
+  return { enabled: false, hint: '尚无可导出的分片' };
+}
 
 export function DownloadPanel() {
   const { tasks, showDownloadPanel, setShowDownloadPanel, startTask, pauseTask, cancelTask, retryFailedSegments, getProgress } = useDownload();
   const [logTaskId, setLogTaskId] = useState<string | null>(null);
   const [logFilter, setLogFilter] = useState<'all' | M3U8SegmentLogStatus>('all');
+  const [exportingTaskId, setExportingTaskId] = useState<string | null>(null);
+
+  const handleExportTask = async (task: M3U8DownloadTask) => {
+    const availability = getExportAvailability(task);
+    if (!availability.enabled || exportingTaskId) return;
+
+    if (
+      !task.source ||
+      !task.videoId ||
+      task.episodeIndex === undefined ||
+      !task.downloadMode ||
+      task.downloadMode === 'browser'
+    ) {
+      alert(availability.hint);
+      return;
+    }
+
+    setExportingTaskId(task.id);
+    try {
+      const { exportedCount, failedTitles } = await exportDownloadTasks([
+        {
+          id: task.id,
+          title: task.title,
+          source: task.source,
+          videoId: task.videoId,
+          episodeIndex: task.episodeIndex,
+          downloadMode: task.downloadMode,
+        },
+      ]);
+
+      if (exportedCount === 0) {
+        alert(`导出失败：${failedTitles.join('、') || '未找到可导出的内容'}`);
+        return;
+      }
+
+      if (failedTitles.length > 0) {
+        alert(`已导出可读取的内容，但以下条目失败：${failedTitles.join('、')}`);
+      }
+    } catch (error) {
+      console.error('导出失败:', error);
+      alert(
+        `导出失败：${error instanceof Error ? error.message : String(error)}`
+      );
+    } finally {
+      setExportingTaskId(null);
+    }
+  };
 
   const logTask = useMemo(
     () => tasks.find((task) => task.id === logTaskId) || null,
@@ -159,6 +234,10 @@ export function DownloadPanel() {
           ) : (
             tasks.map((task) => {
               const progress = getProgress(task.id);
+              const exportAvailability = getExportAvailability(task);
+              const isExporting = exportingTaskId === task.id;
+              const exportDisabled =
+                !exportAvailability.enabled || Boolean(exportingTaskId);
               return (
                 <div
                   key={task.id}
@@ -277,6 +356,30 @@ export function DownloadPanel() {
                         <path strokeLinecap='round' strokeLinejoin='round' strokeWidth='2' d='M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16' />
                       </svg>
                       删除
+                    </button>
+
+                    <button
+                      type='button'
+                      onClick={() => handleExportTask(task)}
+                      disabled={exportDisabled}
+                      title={exportAvailability.hint}
+                      aria-label={
+                        isExporting
+                          ? '导出中'
+                          : exportAvailability.enabled
+                          ? '导出'
+                          : exportAvailability.hint
+                      }
+                      className={`flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-emerald-400 ${
+                        exportDisabled
+                          ? 'cursor-not-allowed bg-emerald-500/40 text-white/70'
+                          : 'cursor-pointer bg-emerald-500 text-white hover:bg-emerald-600'
+                      }`}
+                    >
+                      <svg className='h-4 w-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'>
+                        <path strokeLinecap='round' strokeLinejoin='round' strokeWidth='2' d='M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4' />
+                      </svg>
+                      {isExporting ? '导出中...' : '导出'}
                     </button>
                   </div>
                 </div>
