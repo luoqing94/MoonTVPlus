@@ -10,6 +10,10 @@ import {
 describe('search page scroll restore', () => {
   const originalUserAgent = navigator.userAgent;
   const originalMaxTouchPoints = navigator.maxTouchPoints;
+  const originalScrollingElement = Object.getOwnPropertyDescriptor(
+    Document.prototype,
+    'scrollingElement'
+  );
 
   beforeEach(() => {
     sessionStorage.clear();
@@ -35,6 +39,13 @@ describe('search page scroll restore', () => {
       configurable: true,
       get: () => originalMaxTouchPoints,
     });
+    if (originalScrollingElement) {
+      Object.defineProperty(
+        Document.prototype,
+        'scrollingElement',
+        originalScrollingElement
+      );
+    }
   });
 
   it('keys scroll independently from the result cache, including query suffixes', () => {
@@ -98,7 +109,7 @@ describe('search page scroll restore', () => {
     expect(window.scrollTo).toHaveBeenCalledWith(0, 1280);
   });
 
-  it('on iOS uses a single window.scrollTo writer and does not dual-write body/html', () => {
+  it('on iOS prefers scrollingElement and falls back when window alone would miss body', () => {
     Object.defineProperty(navigator, 'userAgent', {
       configurable: true,
       get: () =>
@@ -106,13 +117,56 @@ describe('search page scroll restore', () => {
     });
     expect(isIOSLikeScrollEnvironment()).toBe(true);
 
+    // Simulate body as the live scroll root: window.scrollTo is a no-op for
+    // getPageScrollTop (scrollY stays 0), scrollingElement points at body.
+    Object.defineProperty(document, 'scrollingElement', {
+      configurable: true,
+      get: () => document.body,
+    });
+    Object.defineProperty(window, 'scrollY', {
+      configurable: true,
+      get: () => 0,
+    });
     document.body.scrollTop = 10;
-    document.documentElement.scrollTop = 20;
+    document.documentElement.scrollTop = 0;
+
     scrollPageTo(1280);
 
+    expect(document.body.scrollTop).toBe(1280);
     expect(window.scrollTo).toHaveBeenCalledWith(0, 1280);
-    // Must not also assign body/html — that desyncs iOS fixed hit targets.
-    expect(document.body.scrollTop).toBe(10);
-    expect(document.documentElement.scrollTop).toBe(20);
+    // documentElement left alone when scrollingElement === body and body moved.
+    expect(document.documentElement.scrollTop).toBe(0);
+  });
+
+  it('on iOS dual-writes the other root only when verification still mismatches', () => {
+    Object.defineProperty(navigator, 'userAgent', {
+      configurable: true,
+      get: () =>
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+    });
+
+    // scrollingElement reports html, but writing html is a no-op for reads —
+    // body is the live root getPageScrollTop sees.
+    Object.defineProperty(document.documentElement, 'scrollTop', {
+      configurable: true,
+      get: () => 0,
+      set: () => {
+        /* swallow so verification still mismatches */
+      },
+    });
+    Object.defineProperty(document, 'scrollingElement', {
+      configurable: true,
+      get: () => document.documentElement,
+    });
+    Object.defineProperty(window, 'scrollY', {
+      configurable: true,
+      get: () => 0,
+    });
+    document.body.scrollTop = 0;
+
+    scrollPageTo(900);
+
+    // Root write missed; fallback should move body.
+    expect(document.body.scrollTop).toBe(900);
   });
 });

@@ -322,6 +322,18 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     const query = currentQueryRef.current.trim();
     if (!query || !eventSourceRef.current || !isLoading) return;
 
+    // Never clobber a complete cache with a shorter partial — that drops
+    // result height on back and makes scroll restore clamp to the top.
+    try {
+      const existing = sessionStorage.getItem(getCacheKey(query));
+      if (existing) {
+        const parsed = JSON.parse(existing) as SearchCachePayload;
+        if (parsed?.status === 'complete') return;
+      }
+    } catch {
+      // Ignore parse / storage errors and fall through to write partial.
+    }
+
     const snapshot = searchResults.concat(pendingResultsRef.current);
     if (snapshot.length > 20) {
       setCachedResults(query, snapshot, 'partial');
@@ -1982,15 +1994,61 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     }
   }, [submittedSearchQuery, privateLibraryOnlyReady, privateLibraryOnly]);
 
-  // Restore after cached/reloaded results are in the tree, before paint.
+  // Restore after cached/reloaded results are in the tree. Keep pending until
+  // getPageScrollTop reaches the target (or height can hold it); one early
+  // paint used to clear pending while the list was still short → stuck at top.
   useLayoutEffect(() => {
     const target = pendingScrollTopRef.current;
     if (target == null || !showResults || searchResults.length === 0) return;
 
-    pendingScrollTopRef.current = null;
-    scrollPageTo(target);
-    const rafId = requestAnimationFrame(() => scrollPageTo(target));
-    return () => cancelAnimationFrame(rafId);
+    let cancelled = false;
+    let tries = 0;
+    const MAX_TRIES = 60;
+    let rafId = 0;
+
+    const maxScrollable = () => {
+      const viewH = window.innerHeight || 0;
+      return Math.max(
+        0,
+        Math.max(
+          document.body?.scrollHeight || 0,
+          document.documentElement?.scrollHeight || 0
+        ) - viewH
+      );
+    };
+
+    const attempt = () => {
+      if (cancelled || pendingScrollTopRef.current == null) return;
+      scrollPageTo(target);
+      const current = getPageScrollTop();
+      const near = Math.abs(current - target) <= 2;
+      const cap = maxScrollable();
+      const heightReady = cap + 2 >= target;
+      const atClamp =
+        heightReady && Math.abs(current - Math.min(target, cap)) <= 2;
+
+      if (near || atClamp) {
+        pendingScrollTopRef.current = null;
+        return;
+      }
+
+      tries += 1;
+      if (tries >= MAX_TRIES) {
+        // Height already enough but we still missed — give up.
+        // If still short, keep pending so later result growth re-runs this effect.
+        if (heightReady) {
+          pendingScrollTopRef.current = null;
+        }
+        return;
+      }
+      rafId = requestAnimationFrame(attempt);
+    };
+
+    rafId = requestAnimationFrame(attempt);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(rafId);
+    };
   }, [searchResults, showResults, submittedSearchQuery]);
 
   useEffect(() => {
@@ -2700,12 +2758,14 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                             剩余 ≤ N 条时加载
                           </span>
                           <input
-                            type='number'
-                            min={AUTO_LOAD_MORE_THRESHOLD_MIN}
-                            max={AUTO_LOAD_MORE_THRESHOLD_MAX}
+                            type='text'
+                            inputMode='numeric'
+                            pattern='[0-9]*'
                             value={autoLoadMoreThreshold}
                             onChange={(e) => {
-                              const n = Number(e.target.value);
+                              const raw = e.target.value.trim();
+                              if (raw === '') return;
+                              const n = Number(raw);
                               if (!Number.isFinite(n)) return;
                               setAutoLoadMoreThreshold(
                                 Math.min(
@@ -2714,9 +2774,13 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                                 )
                               );
                             }}
+                            onWheel={(e) => {
+                              // Avoid spinning a focused numeric field; keep page scroll.
+                              e.currentTarget.blur();
+                            }}
                             className='w-14 rounded-md border border-gray-200 bg-white px-1.5 py-0.5 text-center text-xs text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200'
                             aria-label='自动加载剩余条数阈值'
-                          />
+                            />
                         </div>
                       </div>
                     )}
@@ -3015,12 +3079,14 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                                   剩余 ≤ N 条时加载
                                 </span>
                                 <input
-                                  type='number'
-                                  min={AUTO_LOAD_MORE_THRESHOLD_MIN}
-                                  max={AUTO_LOAD_MORE_THRESHOLD_MAX}
+                                  type='text'
+                                  inputMode='numeric'
+                                  pattern='[0-9]*'
                                   value={autoLoadMoreThreshold}
                                   onChange={(e) => {
-                                    const n = Number(e.target.value);
+                                    const raw = e.target.value.trim();
+                                    if (raw === '') return;
+                                    const n = Number(raw);
                                     if (!Number.isFinite(n)) return;
                                     setAutoLoadMoreThreshold(
                                       Math.min(
@@ -3029,9 +3095,13 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                                       )
                                     );
                                   }}
+                                  onWheel={(e) => {
+                                    // Avoid spinning a focused numeric field; keep page scroll.
+                                    e.currentTarget.blur();
+                                  }}
                                   className='w-14 rounded-md border border-gray-200 bg-white px-1.5 py-0.5 text-center text-xs text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200'
                                   aria-label='自动加载剩余条数阈值'
-                                />
+                                  />
                               </div>
                             </div>
                           )}

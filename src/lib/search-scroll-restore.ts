@@ -77,16 +77,41 @@ export function isIOSLikeScrollEnvironment(): boolean {
   return false;
 }
 
+function scrollNear(a: number, b: number): boolean {
+  return Math.abs(a - b) <= 2;
+}
+
+/**
+ * Move the real page scroll root. Prefer a single writer (scrollingElement /
+ * window) so iOS fixed hit-targets stay in sync; only dual-write body+html
+ * when verification shows the page did not move (body-as-root cases).
+ */
 export function scrollPageTo(top: number): void {
   if (typeof window === 'undefined' || !Number.isFinite(top) || top < 0) return;
 
-  // iOS Safari: a single writer avoids fixed-layer hit-target desync after
-  // frequent search → play → back scroll restores.
+  const root =
+    typeof document !== 'undefined' ? document.scrollingElement : null;
+
   if (isIOSLikeScrollEnvironment()) {
+    // Prefer the browser's scrolling element (often body on this app).
+    if (root) {
+      (root as HTMLElement).scrollTop = top;
+    }
     try {
       window.scrollTo(0, top);
     } catch {
       // jsdom does not implement window.scrollTo.
+    }
+    if (scrollNear(getPageScrollTop(), top)) return;
+
+    // window/scrollingElement alone missed the live root — write the other.
+    if (root === document.body) {
+      document.documentElement.scrollTop = top;
+    } else if (root === document.documentElement) {
+      document.body.scrollTop = top;
+    } else {
+      document.body.scrollTop = top;
+      document.documentElement.scrollTop = top;
     }
     return;
   }
