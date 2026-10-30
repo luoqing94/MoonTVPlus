@@ -471,7 +471,7 @@ export default function SearchOverlayScrollbar({
   return (
     <div
       ref={trackRef}
-      className={`fixed right-0 z-[400] w-5 touch-none md:right-1.5 md:w-2 ${
+      className={`fixed right-0 z-[400] w-8 touch-none md:right-1.5 md:w-2 ${
         showInteractive ? 'pointer-events-auto' : 'pointer-events-none'
       }`}
       style={{
@@ -493,9 +493,9 @@ export default function SearchOverlayScrollbar({
       onPointerDown={onTrackPointerDown}
       aria-hidden={!showInteractive}
     >
-      {/* Visual thumb: inset on mobile so the hit area (w-5) is wider than the bar */}
+      {/* Visual thumb ~24px on mobile (3× prior ~8px); track w-8 hit area with inset */}
       <div
-        className={`absolute rounded-full bg-gray-400/60 shadow-sm transition-opacity duration-200 active:bg-green-500/80 hover:bg-green-500/75 dark:bg-gray-500/55 dark:active:bg-green-400/80 dark:hover:bg-green-400/75 left-1.5 right-1.5 md:left-0 md:right-0 ${
+        className={`absolute rounded-full bg-gray-400/60 shadow-sm transition-opacity duration-200 active:bg-green-500/80 hover:bg-green-500/75 dark:bg-gray-500/55 dark:active:bg-green-400/80 dark:hover:bg-green-400/75 left-1 right-1 md:left-0 md:right-0 ${
           showInteractive ? 'opacity-100' : 'opacity-0'
         }`}
         style={{
