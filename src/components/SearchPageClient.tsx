@@ -80,11 +80,21 @@ const PANSOU_CLOUD_TYPE_OPTIONS = Object.entries(CLOUD_TYPE_NAMES).map(
   ([value, label]) => ({ value, label })
 );
 
+type SourcePageMeta = {
+  page: number;
+  pageCount: number;
+  hasMore: boolean;
+};
+
 type SearchCachePayload = {
   status: 'complete' | 'partial';
   results: SearchResult[];
   query: string;
   updatedAt: number;
+  /** Per-source CMS pagination — needed so 「加载更多」 survives cache hits. */
+  pageMeta?: Record<string, SourcePageMeta>;
+  hasMorePages?: boolean;
+  searchMaxPages?: number;
 };
 
 export function SearchPageClient({ searchBase = '/search' }: { searchBase?: string }) {
@@ -144,12 +154,12 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
   const [totalSources, setTotalSources] = useState(0);
   const [completedSources, setCompletedSources] = useState(0);
   // Per-source CMS pagination (for 「加载更多」)
-  const sourcePageMetaRef = useRef<
-    Map<string, { page: number; pageCount: number; hasMore: boolean }>
-  >(new Map());
+  const sourcePageMetaRef = useRef<Map<string, SourcePageMeta>>(new Map());
   const [hasMorePages, setHasMorePages] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [searchMaxPages, setSearchMaxPages] = useState(1);
+  const searchMaxPagesRef = useRef(1);
+  const hasMorePagesRef = useRef(false);
   const loadMoreAbortRef = useRef<AbortController | null>(null);
   const pendingResultsRef = useRef<SearchResult[]>([]);
   const flushTimerRef = useRef<number | null>(null);
@@ -168,6 +178,8 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
   const [forceRefresh, setForceRefresh] = useState(false);
   // 是否使用了缓存结果
   const [isFromCache, setIsFromCache] = useState(false);
+  /** Old session cache entries lack pagination meta — footer offers refresh. */
+  const [cacheLacksPageMeta, setCacheLacksPageMeta] = useState(false);
   // 前端标题过滤（精确搜索）：默认开启，与用户菜单「精确搜索」共用 localStorage
   const [exactSearch, setExactSearch] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -199,7 +211,14 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
   };
 
   // 从 sessionStorage 获取完整缓存的搜索结果（partial 只给播放页快速启动使用）
-  const getCachedResults = (query: string): SearchResult[] | null => {
+  const getCachedResults = (
+    query: string
+  ): {
+    results: SearchResult[];
+    pageMeta?: Record<string, SourcePageMeta>;
+    hasMorePages?: boolean;
+    searchMaxPages?: number;
+  } | null => {
     if (typeof window === 'undefined') return null;
     try {
       const cacheKey = getCacheKey(query);
@@ -208,7 +227,12 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
 
       const parsed = JSON.parse(cached) as SearchCachePayload;
       if (parsed?.status === 'complete' && Array.isArray(parsed.results)) {
-        return parsed.results;
+        return {
+          results: parsed.results,
+          pageMeta: parsed.pageMeta,
+          hasMorePages: parsed.hasMorePages,
+          searchMaxPages: parsed.searchMaxPages,
+        };
       }
     } catch (error) {
       console.error('Failed to get cached results:', error);
@@ -216,11 +240,35 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     return null;
   };
 
-  // 保存搜索结果到 sessionStorage
+  const snapshotPageMetaForCache = (): Record<string, SourcePageMeta> => {
+    const out: Record<string, SourcePageMeta> = {};
+    sourcePageMetaRef.current.forEach((meta, key) => {
+      out[key] = { ...meta };
+    });
+    return out;
+  };
+
+  const updateHasMorePages = (next: boolean) => {
+    hasMorePagesRef.current = next;
+    setHasMorePages(next);
+  };
+
+  const updateSearchMaxPages = (next: number) => {
+    if (!(next > 0)) return;
+    searchMaxPagesRef.current = next;
+    setSearchMaxPages(next);
+  };
+
+  // 保存搜索结果到 sessionStorage（complete 时附带分页元数据，避免缓存命中丢「加载更多」）
   const setCachedResults = (
     query: string,
     results: SearchResult[],
-    status: SearchCachePayload['status'] = 'complete'
+    status: SearchCachePayload['status'] = 'complete',
+    extras?: {
+      hasMorePages?: boolean;
+      searchMaxPages?: number;
+      pageMeta?: Record<string, SourcePageMeta>;
+    }
   ) => {
     if (typeof window === 'undefined') return;
     try {
@@ -231,6 +279,15 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
         query: query.trim(),
         updatedAt: Date.now(),
       };
+      if (status === 'complete') {
+        payload.pageMeta = extras?.pageMeta ?? snapshotPageMetaForCache();
+        payload.hasMorePages =
+          extras?.hasMorePages ??
+          hasMorePagesRef.current ??
+          Array.from(sourcePageMetaRef.current.values()).some((m) => m.hasMore);
+        payload.searchMaxPages =
+          extras?.searchMaxPages ?? searchMaxPagesRef.current;
+      }
       sessionStorage.setItem(cacheKey, JSON.stringify(payload));
     } catch (error) {
       console.error('Failed to cache results:', error);
@@ -1551,19 +1608,37 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
 
       // 检查是否有缓存且不是强制刷新
       if (!forceRefresh) {
-        const cachedResults = getCachedResults(trimmed);
-        if (cachedResults && cachedResults.length > 0) {
-          // 使用缓存的结果
+        const cached = getCachedResults(trimmed);
+        if (cached && cached.results.length > 0) {
+          // 使用缓存的结果（并恢复分页元数据，否则「加载更多」会整块消失）
           setIsLoading(false); // 先设置加载状态为 false
-          setSearchResults(cachedResults);
+          setSearchResults(cached.results);
           setShowResults(true);
           setTotalSources(1);
           setCompletedSources(1);
-          sourcePageMetaRef.current = new Map();
-          setHasMorePages(false);
+          const restoredMeta = new Map<string, SourcePageMeta>();
+          if (cached.pageMeta) {
+            Object.entries(cached.pageMeta).forEach(([key, meta]) => {
+              restoredMeta.set(key, meta);
+            });
+          }
+          sourcePageMetaRef.current = restoredMeta;
+          const restoredHasMore =
+            restoredMeta.size > 0 &&
+            (typeof cached.hasMorePages === 'boolean'
+              ? cached.hasMorePages
+              : Array.from(restoredMeta.values()).some((m) => m.hasMore));
+          updateHasMorePages(restoredHasMore);
+          if (
+            typeof cached.searchMaxPages === 'number' &&
+            cached.searchMaxPages > 0
+          ) {
+            updateSearchMaxPages(cached.searchMaxPages);
+          }
           setIsLoadingMore(false);
           setShowSuggestions(false);
           setIsFromCache(true); // 标记为缓存结果
+          setCacheLacksPageMeta(restoredMeta.size === 0);
           // 保存到搜索历史
           addSearchHistory(query);
           return;
@@ -1578,6 +1653,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
 
       // 开始新搜索时，重置缓存标记
       setIsFromCache(false);
+      setCacheLacksPageMeta(false);
 
       // 新搜索：关闭旧连接并清空结果
       if (eventSourceRef.current) {
@@ -1593,7 +1669,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
       setTotalSources(0);
       setCompletedSources(0);
       sourcePageMetaRef.current = new Map();
-      setHasMorePages(false);
+      updateHasMorePages(false);
       setIsLoadingMore(false);
       if (loadMoreAbortRef.current) {
         try {
@@ -1644,7 +1720,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                 setTotalSources(payload.totalSources || 0);
                 setCompletedSources(0);
                 if (typeof payload.maxPages === 'number' && payload.maxPages > 0) {
-                  setSearchMaxPages(payload.maxPages);
+                  updateSearchMaxPages(payload.maxPages);
                 }
                 break;
               case 'source_result': {
@@ -1653,14 +1729,16 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                   const page = Number(payload.page) || 1;
                   const pageCount = Number(payload.pageCount) || page;
                   const hasMore = Boolean(payload.hasMore);
+                  const cappedHasMore =
+                    hasMore && page < searchMaxPagesRef.current;
                   sourcePageMetaRef.current.set(String(payload.source), {
                     page,
                     pageCount,
-                    hasMore,
+                    hasMore: cappedHasMore,
                   });
-                  setHasMorePages(
+                  updateHasMorePages(
                     Array.from(sourcePageMetaRef.current.values()).some(
-                      (m) => m.hasMore
+                      (m) => m.hasMore && m.page < searchMaxPagesRef.current
                     )
                   );
                 }
@@ -1699,9 +1777,9 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                     pageCount: Number(payload.pageCount) || 0,
                     hasMore: false,
                   });
-                  setHasMorePages(
+                  updateHasMorePages(
                     Array.from(sourcePageMetaRef.current.values()).some(
-                      (m) => m.hasMore
+                      (m) => m.hasMore && m.page < searchMaxPagesRef.current
                     )
                   );
                 }
@@ -1896,13 +1974,14 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     const trimmed = currentQueryRef.current.trim();
     if (!trimmed || isLoading || isLoadingMore) return;
 
+    const maxPagesCap = searchMaxPagesRef.current;
     const nextSources = Array.from(sourcePageMetaRef.current.entries())
-      .filter(([, meta]) => meta.hasMore)
+      .filter(([, meta]) => meta.hasMore && meta.page < maxPagesCap)
       .map(([key, meta]) => ({ key, page: meta.page + 1 }))
-      .filter((s) => s.page <= searchMaxPages);
+      .filter((s) => s.page <= maxPagesCap);
 
     if (nextSources.length === 0) {
-      setHasMorePages(false);
+      updateHasMorePages(false);
       return;
     }
 
@@ -1936,17 +2015,24 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
       if (Array.isArray(data.sources)) {
         for (const src of data.sources) {
           if (!src?.key) continue;
+          const nextPage =
+            Number(src.page) ||
+            nextSources.find((s) => s.key === src.key)?.page ||
+            1;
           sourcePageMetaRef.current.set(String(src.key), {
-            page: Number(src.page) || nextSources.find((s) => s.key === src.key)?.page || 1,
+            page: nextPage,
             pageCount: Number(src.pageCount) || 1,
-            hasMore: Boolean(src.hasMore),
+            hasMore:
+              Boolean(src.hasMore) && nextPage < searchMaxPagesRef.current,
           });
         }
-        setHasMorePages(
-          Array.from(sourcePageMetaRef.current.values()).some((m) => m.hasMore)
+        updateHasMorePages(
+          Array.from(sourcePageMetaRef.current.values()).some(
+            (m) => m.hasMore && m.page < searchMaxPagesRef.current
+          )
         );
       } else {
-        setHasMorePages(Boolean(data.hasMore));
+        updateHasMorePages(Boolean(data.hasMore));
       }
 
       if (Array.isArray(data.results) && data.results.length > 0) {
@@ -2958,10 +3044,9 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                     })()
                   )}
                   {!isLoading &&
-                    !isFromCache &&
                     useFluidSearch &&
                     searchResults.length > 0 && (
-                    <div className='mt-10 flex justify-center'>
+                    <div className='mt-10 mb-6 flex flex-col items-center gap-2 pb-2'>
                       {hasMorePages ? (
                         <button
                           type='button'
@@ -2974,6 +3059,22 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                           )}
                           {isLoadingMore ? '加载中…' : '加载更多'}
                         </button>
+                      ) : isFromCache && cacheLacksPageMeta ? (
+                        <button
+                          type='button'
+                          onClick={() => setForceRefresh(true)}
+                          disabled={isLoading}
+                          className='inline-flex items-center gap-2 rounded-full border border-green-500/40 bg-green-50 px-6 py-2.5 text-sm font-medium text-green-700 transition-colors hover:bg-green-100 disabled:cursor-not-allowed disabled:opacity-60 dark:border-green-400/30 dark:bg-green-900/20 dark:text-green-300 dark:hover:bg-green-900/40'
+                        >
+                          刷新以加载更多
+                        </button>
+                      ) : searchMaxPages <= 1 ? (
+                        <span className='text-center text-sm text-gray-400 dark:text-gray-500'>
+                          已达最大页数
+                          <span className='mt-0.5 block text-xs text-gray-400/80 dark:text-gray-600'>
+                            管理员可在站点设置提高「搜索下游最大页数」
+                          </span>
+                        </span>
                       ) : (
                         <span className='text-sm text-gray-400 dark:text-gray-500'>
                           没有更多了

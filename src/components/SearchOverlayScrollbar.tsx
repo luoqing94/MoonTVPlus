@@ -15,6 +15,8 @@ const HIDE_DELAY_MS = 1200;
 const MIN_THUMB_PX = 36;
 const TRACK_TOP = 72;
 const TRACK_BOTTOM = 96;
+/** If a drag never receives pointerup (common on flaky iOS), force-end it. */
+const DRAG_FAILSAFE_MS = 2500;
 
 type ViewportMetrics = {
   /** Layout/visual client height used for scroll range. */
@@ -49,6 +51,10 @@ function readViewportMetrics(): ViewportMetrics {
  * This component pins the track to visualViewport and uses a touch-safe
  * drag path (touch-action: none, no preventDefault/capture on coarse
  * pointers, rAF-throttled window.scrollTo).
+ *
+ * Vanish fix: never unmount the track when canScroll flickers false (CSS
+ * hide instead); never let a stuck draggingRef permanently suppress reveal
+ * on subsequent scrolls; keep canScroll metrics fresh even during drag.
  */
 export default function SearchOverlayScrollbar({
   hoverTargetRef,
@@ -56,6 +62,7 @@ export default function SearchOverlayScrollbar({
 }: SearchOverlayScrollbarProps) {
   const trackRef = useRef<HTMLDivElement>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragFailsafeRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const draggingRef = useRef(false);
   const dragOffsetRef = useRef(0);
   const keepVisibleRef = useRef(false);
@@ -67,6 +74,11 @@ export default function SearchOverlayScrollbar({
     trackHeight: 0,
     thumbHeight: MIN_THUMB_PX,
   });
+  /** Active drag pointer listeners (window) — cleaned by endDrag. */
+  const dragListenersRef = useRef<{
+    onMove: ((ev: PointerEvent) => void) | null;
+    onUp: ((ev: PointerEvent) => void) | null;
+  }>({ onMove: null, onUp: null });
 
   const [visible, setVisible] = useState(false);
   const [thumb, setThumb] = useState({ height: MIN_THUMB_PX, top: 0 });
@@ -84,6 +96,13 @@ export default function SearchOverlayScrollbar({
     }
   }, []);
 
+  const clearDragFailsafe = useCallback(() => {
+    if (dragFailsafeRef.current) {
+      clearTimeout(dragFailsafeRef.current);
+      dragFailsafeRef.current = null;
+    }
+  }, []);
+
   const scheduleHide = useCallback(() => {
     clearHideTimer();
     hideTimerRef.current = setTimeout(() => {
@@ -97,7 +116,7 @@ export default function SearchOverlayScrollbar({
     scheduleHide();
   }, [scheduleHide]);
 
-  const recompute = useCallback(() => {
+  const recompute = useCallback((opts?: { skipThumb?: boolean }) => {
     if (typeof window === 'undefined') return;
     const vp = readViewportMetrics();
     setViewport((prev) =>
@@ -133,11 +152,13 @@ export default function SearchOverlayScrollbar({
       trackHeight,
       thumbHeight,
     };
+    setCanScroll(maxScroll > 8);
+
+    if (opts?.skipThumb) return;
+
     const travel = Math.max(0, trackHeight - thumbHeight);
     const thumbTop =
       maxScroll > 0 ? Math.round((scrollTop / maxScroll) * travel) : 0;
-
-    setCanScroll(maxScroll > 8);
     setThumb({ height: thumbHeight, top: thumbTop });
   }, []);
 
@@ -163,8 +184,8 @@ export default function SearchOverlayScrollbar({
     pendingScrollRef.current = null;
     if (next == null) return;
     applyScrollTop(next);
-    // Update thumb from live scroll position after the write.
-    recompute();
+    // Update metrics from live scroll; keep optimistic thumb during drag.
+    recompute({ skipThumb: draggingRef.current });
   }, [applyScrollTop, recompute]);
 
   const scrollFromThumbTop = useCallback(
@@ -186,7 +207,7 @@ export default function SearchOverlayScrollbar({
           rafRef.current = null;
         }
         applyScrollTop(nextTop);
-        recompute();
+        recompute({ skipThumb: true });
         return;
       }
 
@@ -198,22 +219,75 @@ export default function SearchOverlayScrollbar({
     [applyScrollTop, flushPendingScroll, recompute]
   );
 
+  const endDrag = useCallback(
+    (opts?: { scheduleHideAfter?: boolean }) => {
+      if (!draggingRef.current && !dragListenersRef.current.onMove) {
+        clearDragFailsafe();
+        return;
+      }
+      draggingRef.current = false;
+      clearDragFailsafe();
+
+      const { onMove, onUp } = dragListenersRef.current;
+      if (onMove) window.removeEventListener('pointermove', onMove);
+      if (onUp) {
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+        window.removeEventListener('touchend', onUp as EventListener);
+        window.removeEventListener('touchcancel', onUp as EventListener);
+      }
+      dragListenersRef.current = { onMove: null, onUp: null };
+
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      if (pendingScrollRef.current != null) {
+        applyScrollTop(pendingScrollRef.current);
+        pendingScrollRef.current = null;
+      }
+      recompute();
+      if (opts?.scheduleHideAfter !== false) {
+        scheduleHide();
+      }
+    },
+    [applyScrollTop, clearDragFailsafe, recompute, scheduleHide]
+  );
+
   useEffect(() => {
     if (!enabled) {
       setVisible(false);
       setCanScroll(false);
       clearHideTimer();
+      endDrag({ scheduleHideAfter: false });
       return;
     }
 
     recompute();
 
     const onScroll = () => {
-      if (draggingRef.current) return; // thumb owns position while dragging
+      if (draggingRef.current) {
+        // Keep canScroll / maxScroll fresh so a viewport glitch during drag
+        // cannot leave the bar permanently unmounted/disabled. Skip thumb
+        // so we don't fight the finger position.
+        recompute({ skipThumb: true });
+        return;
+      }
       recompute();
       reveal();
     };
-    const onViewportChange = () => recompute();
+    const onViewportChange = () => {
+      recompute({ skipThumb: draggingRef.current });
+    };
+
+    // Global safety: if a drag never got pointerup (iOS quirk), any later
+    // touch/pointer end on the window must clear draggingRef so scroll
+    // can reveal the bar again.
+    const onGlobalPointerEnd = () => {
+      if (draggingRef.current) {
+        endDrag();
+      }
+    };
 
     document.body.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('scroll', onScroll, { passive: true });
@@ -221,6 +295,14 @@ export default function SearchOverlayScrollbar({
       passive: true,
     });
     window.addEventListener('resize', onViewportChange);
+    window.addEventListener('pointerup', onGlobalPointerEnd);
+    window.addEventListener('pointercancel', onGlobalPointerEnd);
+    window.addEventListener('touchend', onGlobalPointerEnd, { passive: true });
+    window.addEventListener('touchcancel', onGlobalPointerEnd, {
+      passive: true,
+    });
+    window.addEventListener('blur', onGlobalPointerEnd);
+    document.addEventListener('visibilitychange', onGlobalPointerEnd);
 
     const vv = window.visualViewport;
     vv?.addEventListener('resize', onViewportChange);
@@ -239,6 +321,10 @@ export default function SearchOverlayScrollbar({
     };
     // Touch: briefly reveal when interacting with the results area.
     const onTouchStart = () => {
+      // A new touch that isn't a continuing drag should clear a stuck drag.
+      if (draggingRef.current) {
+        endDrag({ scheduleHideAfter: false });
+      }
       recompute();
       reveal();
     };
@@ -248,7 +334,7 @@ export default function SearchOverlayScrollbar({
 
     const ro =
       typeof ResizeObserver !== 'undefined'
-        ? new ResizeObserver(() => recompute())
+        ? new ResizeObserver(() => recompute({ skipThumb: draggingRef.current }))
         : null;
     if (target && ro) ro.observe(target);
     if (document.body && ro) ro.observe(document.body);
@@ -258,6 +344,12 @@ export default function SearchOverlayScrollbar({
       window.removeEventListener('scroll', onScroll);
       document.documentElement.removeEventListener('scroll', onScroll);
       window.removeEventListener('resize', onViewportChange);
+      window.removeEventListener('pointerup', onGlobalPointerEnd);
+      window.removeEventListener('pointercancel', onGlobalPointerEnd);
+      window.removeEventListener('touchend', onGlobalPointerEnd);
+      window.removeEventListener('touchcancel', onGlobalPointerEnd);
+      window.removeEventListener('blur', onGlobalPointerEnd);
+      document.removeEventListener('visibilitychange', onGlobalPointerEnd);
       vv?.removeEventListener('resize', onViewportChange);
       vv?.removeEventListener('scroll', onViewportChange);
       target?.removeEventListener('mouseenter', onEnter);
@@ -265,6 +357,8 @@ export default function SearchOverlayScrollbar({
       target?.removeEventListener('touchstart', onTouchStart);
       ro?.disconnect();
       clearHideTimer();
+      clearDragFailsafe();
+      endDrag({ scheduleHideAfter: false });
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     };
   }, [
@@ -274,10 +368,13 @@ export default function SearchOverlayScrollbar({
     reveal,
     scheduleHide,
     clearHideTimer,
+    clearDragFailsafe,
+    endDrag,
   ]);
 
   const onTrackPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
+    if (!canScroll) return;
     const track = trackRef.current;
     if (!track) return;
 
@@ -298,6 +395,9 @@ export default function SearchOverlayScrollbar({
     const { thumbHeight } = metricsRef.current;
     const y = event.clientY - rect.top;
     const onThumb = y >= thumb.top && y <= thumb.top + thumb.height;
+
+    // Clear any previous drag listeners before starting a new one.
+    endDrag({ scheduleHideAfter: false });
 
     draggingRef.current = true;
     dragOffsetRef.current = onThumb ? y - thumb.top : thumbHeight / 2;
@@ -322,38 +422,46 @@ export default function SearchOverlayScrollbar({
       const r = trackRef.current.getBoundingClientRect();
       scrollFromThumbTop(ev.clientY - r.top - dragOffsetRef.current);
     };
-    const onUp = (ev: PointerEvent) => {
-      if (isCoarse && ev.pointerId !== event.pointerId) return;
-      draggingRef.current = false;
+    const onUp = (ev: PointerEvent | TouchEvent | Event) => {
+      if (
+        isCoarse &&
+        'pointerId' in ev &&
+        (ev as PointerEvent).pointerId !== event.pointerId
+      ) {
+        return;
+      }
       if (!isCoarse) {
         try {
-          track.releasePointerCapture(ev.pointerId);
+          track.releasePointerCapture((ev as PointerEvent).pointerId);
         } catch {
           // ignore
         }
       }
-      // Flush any pending rAF scroll so we land on the final thumb position.
-      if (rafRef.current != null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-      if (pendingScrollRef.current != null) {
-        applyScrollTop(pendingScrollRef.current);
-        pendingScrollRef.current = null;
-      }
-      recompute();
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('pointercancel', onUp);
-      scheduleHide();
+      endDrag();
     };
+
+    dragListenersRef.current = { onMove, onUp };
     window.addEventListener('pointermove', onMove, { passive: true });
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
+    // Extra end signals for coarse pointers that sometimes skip pointerup.
+    window.addEventListener('touchend', onUp, { passive: true });
+    window.addEventListener('touchcancel', onUp, { passive: true });
+
+    clearDragFailsafe();
+    dragFailsafeRef.current = setTimeout(() => {
+      if (draggingRef.current) {
+        endDrag();
+      }
+    }, DRAG_FAILSAFE_MS);
   };
 
-  if (!enabled || !canScroll) return null;
+  if (!enabled) return null;
 
+  // Keep the track mounted whenever enabled so canScroll flickering (iOS
+  // visualViewport / address-bar) cannot permanently remove the control.
+  // When there is nothing to scroll, hide it visually and disable hits.
+  const showInteractive = canScroll && visible;
   const trackTop = viewport.offsetTop + TRACK_TOP;
   const trackHeight = Math.max(
     0,
@@ -364,10 +472,16 @@ export default function SearchOverlayScrollbar({
     <div
       ref={trackRef}
       className={`fixed right-0 z-[400] w-5 touch-none md:right-1.5 md:w-2 ${
-        visible ? 'pointer-events-auto' : 'pointer-events-none'
+        showInteractive ? 'pointer-events-auto' : 'pointer-events-none'
       }`}
-      style={{ top: trackTop, height: trackHeight }}
+      style={{
+        top: trackTop,
+        height: trackHeight,
+        // Soft-hide when content fits the viewport.
+        visibility: canScroll ? 'visible' : 'hidden',
+      }}
       onMouseEnter={() => {
+        if (!canScroll) return;
         keepVisibleRef.current = true;
         clearHideTimer();
         setVisible(true);
@@ -377,12 +491,12 @@ export default function SearchOverlayScrollbar({
         scheduleHide();
       }}
       onPointerDown={onTrackPointerDown}
-      aria-hidden={!visible}
+      aria-hidden={!showInteractive}
     >
       {/* Visual thumb: inset on mobile so the hit area (w-5) is wider than the bar */}
       <div
         className={`absolute rounded-full bg-gray-400/60 shadow-sm transition-opacity duration-200 active:bg-green-500/80 hover:bg-green-500/75 dark:bg-gray-500/55 dark:active:bg-green-400/80 dark:hover:bg-green-400/75 left-1.5 right-1.5 md:left-0 md:right-0 ${
-          visible ? 'opacity-100' : 'opacity-0'
+          showInteractive ? 'opacity-100' : 'opacity-0'
         }`}
         style={{
           height: thumb.height,
