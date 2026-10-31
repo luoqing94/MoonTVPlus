@@ -12,7 +12,7 @@ type SearchOverlayScrollbarProps = {
 };
 
 const HIDE_DELAY_MS = 1200;
-const MIN_THUMB_PX = 18;
+const MIN_THUMB_PX = 36;
 const TRACK_TOP = 72;
 const TRACK_BOTTOM = 96;
 /** If a drag never receives pointerup (common on flaky iOS), force-end it. */
@@ -142,10 +142,10 @@ export default function SearchOverlayScrollbar({
     const maxScroll = Math.max(0, scrollHeight - clientHeight);
     const trackHeight = Math.max(0, vp.viewportHeight - TRACK_TOP - TRACK_BOTTOM);
     const ratio = scrollHeight > 0 ? clientHeight / scrollHeight : 1;
-    // Visual length ~half of prior proportional thumb (user request).
+    // Proportional thumb (×1); prior 8df1288 used ×0.5 + MIN 18 — user asked height ×2, width unchanged.
     const thumbHeight = Math.max(
       MIN_THUMB_PX,
-      Math.min(trackHeight, Math.round(trackHeight * ratio * 0.5))
+      Math.min(trackHeight, Math.round(trackHeight * ratio))
     );
 
     metricsRef.current = {
@@ -481,7 +481,7 @@ export default function SearchOverlayScrollbar({
       }}
       aria-hidden={!showInteractive}
     >
-      {/* Visual thumb ~48px on mobile (½ of prior ~96px); track w-12 fits; desktop stays thin md:w-2 */}
+      {/* Visual thumb ~48px wide on mobile (w-12); height proportional ×1 (MIN 36); desktop stays thin md:w-2 */}
       <div
         className={`absolute touch-none rounded-full bg-gray-400/60 shadow-sm transition-opacity duration-200 active:bg-green-500/80 hover:bg-green-500/75 dark:bg-gray-500/55 dark:active:bg-green-400/80 dark:hover:bg-green-400/75 left-0 right-0 md:left-0 md:right-0 ${
           showInteractive
