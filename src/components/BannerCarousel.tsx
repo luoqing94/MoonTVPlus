@@ -93,7 +93,7 @@ export default function BannerCarousel({
 
   // 跳转到播放页面
   const handlePlay = (title: string) => {
-    router.push(`/play?title=${encodeURIComponent(title)}`);
+    router.push(`/play?title=${encodeURIComponent(title)}`, { scroll: false });
   };
 
   // 切换音量

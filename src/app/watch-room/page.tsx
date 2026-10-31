@@ -265,7 +265,7 @@ function WatchRoomPageContent() {
       if (state.videoName) params.set('title', state.videoName);
       if (state.videoYear) params.set('year', state.videoYear);
       if (state.searchTitle) params.set('stitle', state.searchTitle);
-      router.push(`/play?${params.toString()}`);
+      router.push(`/play?${params.toString()}`, { scroll: false });
     }
     // 房主暂无播放状态时停留在本页等待，房主开始播放后会收到 play:change 自动跟随
   }, [currentRoom, isOwner]);
@@ -288,7 +288,7 @@ function WatchRoomPageContent() {
         if (state.videoYear) params.set('year', state.videoYear);
         if (state.searchTitle) params.set('stitle', state.searchTitle);
 
-        router.push(`/play?${params.toString()}`);
+        router.push(`/play?${params.toString()}`, { scroll: false });
       }
     };
 
@@ -413,7 +413,7 @@ function WatchRoomPageContent() {
                       if (state.videoName) params.set('title', state.videoName);
                       if (state.videoYear) params.set('year', state.videoYear);
                       if (state.searchTitle) params.set('stitle', state.searchTitle);
-                      router.push(`/play?${params.toString()}`);
+                      router.push(`/play?${params.toString()}`, { scroll: false });
                     } else if (state.type === 'live') {
                       // 判断是否为 weblive 格式（channelUrl 包含 platform:roomId）
                       if (state.channelUrl && state.channelUrl.includes(':')) {

@@ -564,7 +564,7 @@ export default function PrivateLibraryPage() {
     }
 
     // 跳转到播放页面
-    router.push(`/play?source=${sourceParam}&id=${encodeURIComponent(video.id)}`);
+    router.push(`/play?source=${sourceParam}&id=${encodeURIComponent(video.id)}`, { scroll: false });
   };
 
   // 使用 Intersection Observer 监听滚动
@@ -999,7 +999,7 @@ export default function PrivateLibraryPage() {
                             const parentDir = '/' + pathParts.slice(0, -1).join('/');
                             const fileName = pathParts[pathParts.length - 1];
                             const encodedDirPath = base58Encode(parentDir);
-                            router.push(`/play?source=xiaoya&id=${encodeURIComponent(encodedDirPath)}&fileName=${encodeURIComponent(fileName)}&title=${encodeURIComponent(title)}`);
+                            router.push(`/play?source=xiaoya&id=${encodeURIComponent(encodedDirPath)}&fileName=${encodeURIComponent(fileName)}&title=${encodeURIComponent(title)}`, { scroll: false });
                           } else {
                             // 文件夹：进入浏览
                             setXiaoyaPath(item.path);
@@ -1101,7 +1101,7 @@ export default function PrivateLibraryPage() {
                         onClick={() => {
                           // ID使用目录路径，额外传递文件名（不需要编码）
                           const encodedDirPath = base58Encode(xiaoyaPath);
-                          router.push(`/play?source=xiaoya&id=${encodeURIComponent(encodedDirPath)}&fileName=${encodeURIComponent(file.name)}&title=${encodeURIComponent(title)}`);
+                          router.push(`/play?source=xiaoya&id=${encodeURIComponent(encodedDirPath)}&fileName=${encodeURIComponent(file.name)}&title=${encodeURIComponent(title)}`, { scroll: false });
                         }}
                         className='flex items-center gap-2 p-3 bg-gray-100 dark:bg-gray-800 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-left'
                       >

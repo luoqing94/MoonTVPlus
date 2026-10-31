@@ -455,8 +455,8 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
           url += `&_reload=${Date.now()}`;
           window.location.href = url;
         } else {
-          // 不在 play 页面，正常跳转
-          router.push(url);
+          // Soft /play overlay: keep underlying list scroll intact.
+          router.push(url, { scroll: false });
         }
       } else if (actualSource && actualId) {
         // 检测当前是否在 play 页面
@@ -482,8 +482,8 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
           url += `&_reload=${Date.now()}`;
           window.location.href = url;
         } else {
-          // 不在 play 页面，正常跳转
-          router.push(url);
+          // Soft /play overlay: keep underlying list scroll intact.
+          router.push(url, { scroll: false });
         }
       }
     }, [

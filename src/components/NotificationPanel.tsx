@@ -122,7 +122,7 @@ export const NotificationPanel: React.FC<NotificationPanelProps> = ({
     // 根据通知类型跳转
     if (notification.type === 'favorite_update' && notification.metadata) {
       const { source, id, title } = notification.metadata;
-      router.push(`/play?source=${source}&id=${id}&title=${encodeURIComponent(title)}`);
+      router.push(`/play?source=${source}&id=${id}&title=${encodeURIComponent(title)}`, { scroll: false });
       onClose();
     } else if (notification.type === 'manga_update' && notification.metadata) {
       const { sourceId, mangaId, title, cover, sourceName } = notification.metadata;

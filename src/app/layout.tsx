@@ -59,8 +59,10 @@ export const viewport: Viewport = {
 
 export default async function RootLayout({
   children,
+  playModal,
 }: {
   children: React.ReactNode;
+  playModal: React.ReactNode;
 }) {
   const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
 
@@ -456,11 +458,13 @@ export default async function RootLayout({
             <WatchRoomProvider>
               <DownloadProvider>
                 <StartupCacheCleanup />
-                {children}
+                <div id='app-route-shell'>{children}</div>
                 <GlobalErrorIndicator />
                 <ChatFloatingWindow />
                 <DownloadBubble />
                 <DownloadPanel />
+                {/* Soft-intercepted /play overlay; must sit above chrome so back closes the player without body position:fixed locks. */}
+                {playModal}
               </DownloadProvider>
             </WatchRoomProvider>
           </SiteProvider>

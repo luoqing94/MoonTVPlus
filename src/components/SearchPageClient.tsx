@@ -15,7 +15,7 @@ import {
   X,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import React, {
   startTransition,
   useEffect,
@@ -153,6 +153,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
   const [converterReady, setConverterReady] = useState(false);
 
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const submittedSearchQuery = searchParams.get('q')?.trim() || '';
   const currentQueryRef = useRef<string>('');
@@ -1164,7 +1165,8 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
                             ? searchQuery.trim()
                             : '',
                         isAggregate: true,
-                      })
+                      }),
+                      { scroll: false }
                     );
                   }}
                   className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-white dark:hover:bg-gray-700 ${
@@ -1352,7 +1354,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
         onClick={() => {
           item.onBeforeNavigate?.();
           saveSearchPositionForPlayback();
-          router.push(itemUrl);
+          router.push(itemUrl, { scroll: false });
         }}
         className='group w-full rounded-2xl border border-gray-200/80 bg-white/90 p-3 text-left shadow-sm transition-all hover:border-green-300 hover:shadow-md dark:border-gray-700 dark:bg-gray-900/70 dark:hover:border-green-700'
       >
@@ -1973,8 +1975,13 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     privateLibraryOnly,
   ]);
 
-  // Pick up the query-keyed scroll saved before navigating to /play.
+  // Pick up the query-keyed scroll saved before a HARD navigate to /play.
+  // Soft overlay keeps this page mounted — skip consume/restore while URL is /play.
   useLayoutEffect(() => {
+    if (pathname === '/play') {
+      pendingScrollTopRef.current = null;
+      return;
+    }
     if (!privateLibraryOnlyReady) return;
     if (!submittedSearchQuery) {
       pendingScrollTopRef.current = null;
@@ -1992,12 +1999,13 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     if (stored != null) {
       pendingScrollTopRef.current = stored;
     }
-  }, [submittedSearchQuery, privateLibraryOnlyReady, privateLibraryOnly]);
+  }, [submittedSearchQuery, privateLibraryOnlyReady, privateLibraryOnly, pathname]);
 
-  // Restore after cached/reloaded results are in the tree. Keep pending until
-  // getPageScrollTop reaches the target (or height can hold it); one early
-  // paint used to clear pending while the list was still short → stuck at top.
+  // Restore after cached/reloaded results are in the tree (hard nav only).
+  // Soft /play overlay must NOT call scrollPageTo — list scroll was never lost,
+  // and document multi-writes reintroduce iOS fixed hit-target desync.
   useLayoutEffect(() => {
+    if (pathname === '/play') return;
     const target = pendingScrollTopRef.current;
     if (target == null || !showResults || searchResults.length === 0) return;
 
@@ -2049,7 +2057,7 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
       cancelled = true;
       cancelAnimationFrame(rafId);
     };
-  }, [searchResults, showResults, submittedSearchQuery]);
+  }, [searchResults, showResults, submittedSearchQuery, pathname]);
 
   useEffect(() => {
     if (!featureFlagsReady) return;
