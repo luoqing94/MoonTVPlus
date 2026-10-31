@@ -12,7 +12,7 @@ type SearchOverlayScrollbarProps = {
 };
 
 const HIDE_DELAY_MS = 1200;
-const MIN_THUMB_PX = 36;
+const MIN_THUMB_PX = 18;
 const TRACK_TOP = 72;
 const TRACK_BOTTOM = 96;
 /** If a drag never receives pointerup (common on flaky iOS), force-end it. */
@@ -43,7 +43,8 @@ function readViewportMetrics(): ViewportMetrics {
 /**
  * Overlay scrollbar for the search page (body is the scroll root).
  * Mobile + desktop: fades in while scrolling (and on results hover on
- * desktop); thumb drag / track jump for scrubbing long lists.
+ * desktop); thumb drag only for scrubbing long lists (blank track
+ * does not jump / does not capture clicks).
  *
  * iOS Safari note: a fixed track sized with innerHeight + preventDefault +
  * setPointerCapture + dual scrollTop writes during drag desyncs the visual
@@ -141,9 +142,10 @@ export default function SearchOverlayScrollbar({
     const maxScroll = Math.max(0, scrollHeight - clientHeight);
     const trackHeight = Math.max(0, vp.viewportHeight - TRACK_TOP - TRACK_BOTTOM);
     const ratio = scrollHeight > 0 ? clientHeight / scrollHeight : 1;
+    // Visual length ~half of prior proportional thumb (user request).
     const thumbHeight = Math.max(
       MIN_THUMB_PX,
-      Math.min(trackHeight, Math.round(trackHeight * ratio))
+      Math.min(trackHeight, Math.round(trackHeight * ratio * 0.5))
     );
 
     metricsRef.current = {
@@ -372,7 +374,8 @@ export default function SearchOverlayScrollbar({
     endDrag,
   ]);
 
-  const onTrackPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+  /** Drag starts only on the thumb; blank track is pointer-events:none. */
+  const onThumbPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     if (!canScroll) return;
     const track = trackRef.current;
@@ -392,29 +395,27 @@ export default function SearchOverlayScrollbar({
     }
 
     const rect = track.getBoundingClientRect();
-    const { thumbHeight } = metricsRef.current;
     const y = event.clientY - rect.top;
-    const onThumb = y >= thumb.top && y <= thumb.top + thumb.height;
 
     // Clear any previous drag listeners before starting a new one.
     endDrag({ scheduleHideAfter: false });
 
     draggingRef.current = true;
-    dragOffsetRef.current = onThumb ? y - thumb.top : thumbHeight / 2;
-    if (!onThumb) {
-      scrollFromThumbTop(y - thumbHeight / 2, true);
-    }
+    // Grab offset within the thumb so it doesn't jump under the finger.
+    dragOffsetRef.current = y - thumb.top;
 
     clearHideTimer();
     setVisible(true);
 
     if (!isCoarse) {
       try {
-        track.setPointerCapture(event.pointerId);
+        (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
       } catch {
         // ignore capture failures on older browsers
       }
     }
+
+    const captureTarget = event.currentTarget as HTMLElement;
 
     const onMove = (ev: PointerEvent) => {
       if (!draggingRef.current || !trackRef.current) return;
@@ -432,7 +433,7 @@ export default function SearchOverlayScrollbar({
       }
       if (!isCoarse) {
         try {
-          track.releasePointerCapture((ev as PointerEvent).pointerId);
+          captureTarget.releasePointerCapture((ev as PointerEvent).pointerId);
         } catch {
           // ignore
         }
@@ -471,37 +472,37 @@ export default function SearchOverlayScrollbar({
   return (
     <div
       ref={trackRef}
-      className={`fixed right-0 z-[400] w-24 touch-none md:right-1.5 md:w-2 ${
-        showInteractive ? 'pointer-events-auto' : 'pointer-events-none'
-      }`}
+      className="pointer-events-none fixed right-0 z-[400] w-12 md:right-1.5 md:w-2"
       style={{
         top: trackTop,
         height: trackHeight,
         // Soft-hide when content fits the viewport.
         visibility: canScroll ? 'visible' : 'hidden',
       }}
-      onMouseEnter={() => {
-        if (!canScroll) return;
-        keepVisibleRef.current = true;
-        clearHideTimer();
-        setVisible(true);
-      }}
-      onMouseLeave={() => {
-        keepVisibleRef.current = false;
-        scheduleHide();
-      }}
-      onPointerDown={onTrackPointerDown}
       aria-hidden={!showInteractive}
     >
-      {/* Visual thumb ~96px on mobile (4× prior ~24px); track w-24 fits thumb; desktop stays thin */}
+      {/* Visual thumb ~48px on mobile (½ of prior ~96px); track w-12 fits; desktop stays thin md:w-2 */}
       <div
-        className={`absolute rounded-full bg-gray-400/60 shadow-sm transition-opacity duration-200 active:bg-green-500/80 hover:bg-green-500/75 dark:bg-gray-500/55 dark:active:bg-green-400/80 dark:hover:bg-green-400/75 left-0 right-0 md:left-0 md:right-0 ${
-          showInteractive ? 'opacity-100' : 'opacity-0'
+        className={`absolute touch-none rounded-full bg-gray-400/60 shadow-sm transition-opacity duration-200 active:bg-green-500/80 hover:bg-green-500/75 dark:bg-gray-500/55 dark:active:bg-green-400/80 dark:hover:bg-green-400/75 left-0 right-0 md:left-0 md:right-0 ${
+          showInteractive
+            ? 'pointer-events-auto opacity-100'
+            : 'pointer-events-none opacity-0'
         }`}
         style={{
           height: thumb.height,
           transform: `translateY(${thumb.top}px)`,
         }}
+        onMouseEnter={() => {
+          if (!canScroll) return;
+          keepVisibleRef.current = true;
+          clearHideTimer();
+          setVisible(true);
+        }}
+        onMouseLeave={() => {
+          keepVisibleRef.current = false;
+          scheduleHide();
+        }}
+        onPointerDown={onThumbPointerDown}
       />
     </div>
   );
