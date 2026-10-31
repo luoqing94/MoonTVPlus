@@ -14,7 +14,7 @@ describe('search-auto-load-more', () => {
     localStorage.clear();
   });
 
-  it('defaults toggle ON and threshold 10', () => {
+  it('defaults toggle ON and threshold 50', () => {
     expect(isSearchAutoLoadMoreEnabled()).toBe(true);
     expect(getSearchAutoLoadMoreThreshold()).toBe(
       AUTO_LOAD_MORE_REMAINING_THRESHOLD_DEFAULT
@@ -25,7 +25,9 @@ describe('search-auto-load-more', () => {
     expect(clampAutoLoadMoreThreshold(0)).toBe(1);
     expect(clampAutoLoadMoreThreshold(10.4)).toBe(10);
     expect(clampAutoLoadMoreThreshold(99)).toBe(50);
-    expect(clampAutoLoadMoreThreshold(NaN)).toBe(10);
+    expect(clampAutoLoadMoreThreshold(NaN)).toBe(
+      AUTO_LOAD_MORE_REMAINING_THRESHOLD_DEFAULT
+    );
   });
 
   it('estimates remaining from geometry', () => {

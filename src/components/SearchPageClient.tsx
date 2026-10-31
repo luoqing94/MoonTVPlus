@@ -186,6 +186,8 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     AUTO_LOAD_MORE_REMAINING_THRESHOLD_DEFAULT
   );
   const autoLoadMoreLoadedRef = useRef(false);
+  const [autoLoadMorePersistReady, setAutoLoadMorePersistReady] =
+    useState(false);
   const pendingResultsRef = useRef<SearchResult[]>([]);
   const flushTimerRef = useRef<number | null>(null);
   const [useFluidSearch, setUseFluidSearch] = useState(true);
@@ -1030,7 +1032,9 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     );
   }, [titleFoldEnabled]);
 
-  // 自动加载更多：默认开；阈值 N 默认 10，均持久化
+  // 自动加载更多：默认开；阈值 N 默认 50，均持久化。
+  // 挂载时先 hydrate，再允许 persist：避免同轮 persist 用初始默认值写回
+  // localStorage，再经 SEARCH_AUTO_LOAD_MORE_EVENT 把刚读到的值盖掉。
   useEffect(() => {
     if (typeof window === 'undefined') return;
     setAutoLoadMore(isSearchAutoLoadMoreEnabled());
@@ -1038,6 +1042,9 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
     setAutoLoadMoreThreshold(n);
     autoLoadMoreThresholdRef.current = n;
     autoLoadMoreLoadedRef.current = true;
+    // 与上面的 setState 同批提交；本轮仍看到旧默认值的 persist 会因
+    // persistReady=false 跳过，下一轮带着 hydrate 后的值再写回。
+    setAutoLoadMorePersistReady(true);
 
     const syncFromStorage = () => {
       setAutoLoadMore(isSearchAutoLoadMoreEnabled());
@@ -1062,15 +1069,27 @@ export function SearchPageClient({ searchBase = '/search' }: { searchBase?: stri
   }, []);
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !autoLoadMoreLoadedRef.current) return;
+    if (
+      typeof window === 'undefined' ||
+      !autoLoadMoreLoadedRef.current ||
+      !autoLoadMorePersistReady
+    ) {
+      return;
+    }
     setSearchAutoLoadMoreEnabled(autoLoadMore);
-  }, [autoLoadMore]);
+  }, [autoLoadMore, autoLoadMorePersistReady]);
 
   useEffect(() => {
-    if (typeof window === 'undefined' || !autoLoadMoreLoadedRef.current) return;
+    if (
+      typeof window === 'undefined' ||
+      !autoLoadMoreLoadedRef.current ||
+      !autoLoadMorePersistReady
+    ) {
+      return;
+    }
     setSearchAutoLoadMoreThreshold(autoLoadMoreThreshold);
     autoLoadMoreThresholdRef.current = autoLoadMoreThreshold;
-  }, [autoLoadMoreThreshold]);
+  }, [autoLoadMoreThreshold, autoLoadMorePersistReady]);
 
   useEffect(() => {
     isLoadingRef.current = isLoading;

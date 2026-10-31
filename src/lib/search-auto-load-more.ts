@@ -1,11 +1,11 @@
 /**
  * Auto「加载更多」: when remaining already-loaded visible cards ≤ N,
- * trigger the same load-more path. Toggle defaults ON; N defaults to 10.
+ * trigger the same load-more path. Toggle defaults ON; N defaults to 50.
  */
 
 export const SEARCH_AUTO_LOAD_MORE_KEY = 'searchAutoLoadMore';
 export const SEARCH_AUTO_LOAD_MORE_THRESHOLD_KEY = 'searchAutoLoadMoreThreshold';
-export const AUTO_LOAD_MORE_REMAINING_THRESHOLD_DEFAULT = 10;
+export const AUTO_LOAD_MORE_REMAINING_THRESHOLD_DEFAULT = 50;
 export const AUTO_LOAD_MORE_THRESHOLD_MIN = 1;
 export const AUTO_LOAD_MORE_THRESHOLD_MAX = 50;
 export const SEARCH_AUTO_LOAD_MORE_EVENT = 'searchAutoLoadMoreChanged';
@@ -44,7 +44,7 @@ export function clampAutoLoadMoreThreshold(n: number): number {
   );
 }
 
-/** Default N=10 when unset / unreadable. */
+/** Default N=50 when unset / unreadable. */
 export function getSearchAutoLoadMoreThreshold(): number {
   if (typeof window === 'undefined') {
     return AUTO_LOAD_MORE_REMAINING_THRESHOLD_DEFAULT;
