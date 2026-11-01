@@ -4916,6 +4916,11 @@ export function PlayPageClient() {
       document
         .querySelectorAll<HTMLDivElement>('body > .art-fullscreen-web')
         .forEach((el) => el.remove());
+      // Soft-play overlay is z-[10000]; iOS fullscreen chooser is appended to body and
+      // must not linger after play unmount / back, or it pops up on the search page.
+      document
+        .querySelectorAll<HTMLDivElement>('body > .ios-fullscreen-dialog')
+        .forEach((el) => el.remove());
     }
   };
 
@@ -7834,6 +7839,9 @@ export function PlayPageClient() {
           document
             .querySelectorAll<HTMLDivElement>('body > .art-fullscreen-web')
             .forEach((el) => el.remove());
+          document
+            .querySelectorAll<HTMLDivElement>('body > .ios-fullscreen-dialog')
+            .forEach((el) => el.remove());
         }
 
         // 动态导入播放器库
@@ -8918,7 +8926,8 @@ export function PlayPageClient() {
                   bottom: 0;
                   background: rgba(0, 0, 0, 0.6);
                   backdrop-filter: blur(4px);
-                  z-index: 1000;
+                  /* Above @playModal / soft-play overlay (z-[10000]) so the chooser is visible */
+                  z-index: 10001;
                   display: flex;
                   align-items: center;
                   justify-content: center;
@@ -9217,13 +9226,16 @@ export function PlayPageClient() {
                 </div>
               `;
 
-                // 添加到页面
+                // Replace any leftover chooser before appending (e.g. covered by play overlay)
+                document
+                  .querySelectorAll('body > .ios-fullscreen-dialog')
+                  .forEach((el) => el.remove());
                 document.body.appendChild(dialog);
 
                 // 点击背景关闭
                 dialog.addEventListener('click', (e) => {
                   if (e.target === dialog) {
-                    document.body.removeChild(dialog);
+                    dialog.remove();
                   }
                 });
 
@@ -9251,7 +9263,7 @@ export function PlayPageClient() {
                     }
 
                     // 关闭对话框
-                    document.body.removeChild(dialog);
+                    dialog.remove();
                   });
                 });
               },
