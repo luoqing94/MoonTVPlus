@@ -15,6 +15,10 @@ const HIDE_DELAY_MS = 1200;
 const MIN_THUMB_PX = 36;
 const TRACK_TOP = 72;
 const TRACK_BOTTOM = 96;
+/** Mobile: use middle fraction of the usable vv band; desktop keeps full band. */
+const MOBILE_TRACK_FRACTION = 0.5;
+/** Tailwind md breakpoint — desktop overlay track stays full-height. */
+const DESKTOP_MQ = '(min-width: 768px)';
 /** If a drag never receives pointerup (common on flaky iOS), force-end it. */
 const DRAG_FAILSAFE_MS = 2500;
 
@@ -40,11 +44,42 @@ function readViewportMetrics(): ViewportMetrics {
   return { clientHeight, offsetTop, viewportHeight };
 }
 
+function isDesktopOverlayTrack(): boolean {
+  if (typeof window === 'undefined') return false;
+  return Boolean(window.matchMedia?.(DESKTOP_MQ).matches);
+}
+
+/**
+ * Track geometry pinned to visualViewport.
+ * Desktop: full usable band (vv − TRACK_TOP − TRACK_BOTTOM).
+ * Mobile: middle ~50% of that band (≈25% empty above/below) so the thumb
+ * stays clear of corner FABs; thumb travel still maps to full page scroll.
+ */
+function getTrackGeometry(vp: ViewportMetrics): {
+  trackTop: number;
+  trackHeight: number;
+} {
+  const usable = Math.max(0, vp.viewportHeight - TRACK_TOP - TRACK_BOTTOM);
+  if (!isDesktopOverlayTrack()) {
+    const trackHeight = Math.max(0, Math.round(usable * MOBILE_TRACK_FRACTION));
+    const pad = Math.max(0, Math.round((usable - trackHeight) / 2));
+    return {
+      trackTop: vp.offsetTop + TRACK_TOP + pad,
+      trackHeight,
+    };
+  }
+  return {
+    trackTop: vp.offsetTop + TRACK_TOP,
+    trackHeight: usable,
+  };
+}
+
 /**
  * Overlay scrollbar for the search page (body is the scroll root).
  * Mobile + desktop: fades in while scrolling (and on results hover on
  * desktop); thumb drag only for scrubbing long lists (blank track
- * does not jump / does not capture clicks).
+ * does not jump / does not capture clicks). Mobile track uses the
+ * middle ~50% of the usable visualViewport band; desktop keeps full height.
  *
  * iOS Safari note: a fixed track sized with innerHeight + preventDefault +
  * setPointerCapture + dual scrollTop writes during drag desyncs the visual
@@ -140,9 +175,9 @@ export default function SearchOverlayScrollbar({
       window.innerHeight ||
       vp.clientHeight;
     const maxScroll = Math.max(0, scrollHeight - clientHeight);
-    const trackHeight = Math.max(0, vp.viewportHeight - TRACK_TOP - TRACK_BOTTOM);
+    const { trackHeight } = getTrackGeometry(vp);
     const ratio = scrollHeight > 0 ? clientHeight / scrollHeight : 1;
-    // Proportional thumb (×1); prior 8df1288 used ×0.5 + MIN 18 — user asked height ×2, width unchanged.
+    // Proportional thumb; clamp to MIN_THUMB so a short mobile track stays grabable.
     const thumbHeight = Math.max(
       MIN_THUMB_PX,
       Math.min(trackHeight, Math.round(trackHeight * ratio))
@@ -463,11 +498,7 @@ export default function SearchOverlayScrollbar({
   // visualViewport / address-bar) cannot permanently remove the control.
   // When there is nothing to scroll, hide it visually and disable hits.
   const showInteractive = canScroll && visible;
-  const trackTop = viewport.offsetTop + TRACK_TOP;
-  const trackHeight = Math.max(
-    0,
-    viewport.viewportHeight - TRACK_TOP - TRACK_BOTTOM
-  );
+  const { trackTop, trackHeight } = getTrackGeometry(viewport);
 
   return (
     <div
@@ -481,7 +512,7 @@ export default function SearchOverlayScrollbar({
       }}
       aria-hidden={!showInteractive}
     >
-      {/* Visual thumb ~48px wide on mobile (w-12); height proportional ×1 (MIN 36); desktop stays thin md:w-2 */}
+      {/* Visual thumb ~48px wide on mobile (w-12); height proportional (MIN 36); desktop thin md:w-2 */}
       <div
         className={`absolute touch-none rounded-full bg-gray-400/60 shadow-sm transition-opacity duration-200 active:bg-green-500/80 hover:bg-green-500/75 dark:bg-gray-500/55 dark:active:bg-green-400/80 dark:hover:bg-green-400/75 left-0 right-0 md:left-0 md:right-0 ${
           showInteractive
