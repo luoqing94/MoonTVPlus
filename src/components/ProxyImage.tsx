@@ -6,6 +6,8 @@ import {
   clearBangumiImageFallbackCacheIfFailed,
   ensureBangumiImagePrimaryProbed,
   processImageUrl,
+  scheduleNearViewportCoverRetry,
+  shouldRetryDirectCover,
   tryApplyBangumiImageFallback,
   tryApplyDoubanImageFallback,
 } from '@/lib/utils';
@@ -20,7 +22,7 @@ interface ProxyImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
 const ProxyImage: React.FC<ProxyImageProps> = ({
   originalSrc,
   displaySrc,
-  retryDelay = 2000,
+  retryDelay: _retryDelay = 2000,
   retryOnError = true,
   loading = 'lazy',
   decoding = 'async',
@@ -71,11 +73,20 @@ const ProxyImage: React.FC<ProxyImageProps> = ({
       return;
     }
 
-    if (retryOnError && !img.dataset.retried) {
-      img.dataset.retried = 'true';
-      window.setTimeout(() => {
-        setCurrentSrc(initialSrc);
-      }, retryDelay);
+    // CMS / direct covers only: same-URL retries near viewport (1s→2s→4s).
+    // Douban/Bangumi keep their own fallbacks above — do not stack generic retries.
+    if (retryOnError && shouldRetryDirectCover(originalSrc)) {
+      scheduleNearViewportCoverRetry(
+        img,
+        () => {
+          // Bounce src so React/img reloads the same URL after an error state
+          setCurrentSrc('');
+          window.requestAnimationFrame(() => {
+            setCurrentSrc(initialSrc);
+          });
+        },
+        { retryKey: initialSrc, rootMargin: '100% 0px' }
+      );
     }
 
     onError?.(e);

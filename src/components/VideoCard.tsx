@@ -46,6 +46,8 @@ import {
   getBangumiImageFallbackUrl,
   getDoubanImageFallbackUrl,
   processImageUrl,
+  scheduleNearViewportCoverRetry,
+  shouldRetryDirectCover,
   tryApplyBangumiImageFallback,
   tryApplyDoubanImageFallback,
 } from '@/lib/utils';
@@ -1118,13 +1120,22 @@ const VideoCard = forwardRef<VideoCardHandle, VideoCardProps>(
                       return;
                     }
 
-                    // 图片加载失败时的重试机制
-                    if (!img.dataset.retried) {
-                      img.dataset.retried = 'true';
-                      setTimeout(() => {
-                        setDisplayPoster(processedPoster);
-                        img.src = processedPoster;
-                      }, 2000);
+                    // CMS / direct covers: same-URL retries near viewport (1s→2s→4s).
+                    // Douban/Bangumi already handled above — do not stack generic retries.
+                    if (
+                      shouldRetryDirectCover(actualPoster) &&
+                      scheduleNearViewportCoverRetry(
+                        img,
+                        () => {
+                          setDisplayPoster(processedPoster);
+                          if (img.isConnected) {
+                            img.src = processedPoster;
+                          }
+                        },
+                        { retryKey: processedPoster, rootMargin: '100% 0px' }
+                      )
+                    ) {
+                      return;
                     }
                   }}
                   style={

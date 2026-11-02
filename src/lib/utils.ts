@@ -561,6 +561,87 @@ export function tryApplyBangumiImageFallback(
   return true;
 }
 
+/** Direct CMS cover retries near viewport: 1s → 2s → 4s (3 retries after first failure). */
+const NEAR_VIEWPORT_COVER_RETRY_DELAYS_MS = [1000, 2000, 4000] as const;
+
+/**
+ * Douban / Bangumi already have their own fallback paths — do not stack generic cover retries.
+ */
+export function shouldRetryDirectCover(originalUrl: string): boolean {
+  if (!originalUrl) return false;
+  if (originalUrl.includes('doubanio.com')) return false;
+  if (isBangumiImageUrl(originalUrl)) return false;
+  return true;
+}
+
+/**
+ * Schedule another same-URL load for a failed cover if the image is near the viewport
+ * (IntersectionObserver rootMargin ~100% vertical). Caps at 3 retries with backoff.
+ * Returns false when the retry budget is exhausted.
+ */
+export function scheduleNearViewportCoverRetry(
+  img: HTMLImageElement,
+  reload: () => void,
+  options?: { rootMargin?: string; retryKey?: string }
+): boolean {
+  const retryKey = options?.retryKey;
+  if (retryKey && img.dataset.coverRetryFor !== retryKey) {
+    img.dataset.coverRetryFor = retryKey;
+    img.dataset.coverRetryCount = '0';
+  }
+
+  const max = NEAR_VIEWPORT_COVER_RETRY_DELAYS_MS.length;
+  const used = Number(img.dataset.coverRetryCount || '0');
+  if (!Number.isFinite(used) || used < 0 || used >= max) {
+    return false;
+  }
+
+  img.dataset.coverRetryCount = String(used + 1);
+  const delay =
+    NEAR_VIEWPORT_COVER_RETRY_DELAYS_MS[used] ??
+    NEAR_VIEWPORT_COVER_RETRY_DELAYS_MS[max - 1];
+
+  const runDelayed = () => {
+    window.setTimeout(() => {
+      if (!img.isConnected) return;
+      reload();
+    }, delay);
+  };
+
+  const rootMargin = options?.rootMargin ?? '100% 0px';
+
+  try {
+    const rect = img.getBoundingClientRect();
+    const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+    // Approx rootMargin 100% 0: one viewport above and below
+    if (rect.bottom >= -vh && rect.top <= vh * 2) {
+      runDelayed();
+      return true;
+    }
+  } catch {
+    runDelayed();
+    return true;
+  }
+
+  if (typeof IntersectionObserver === 'undefined') {
+    runDelayed();
+    return true;
+  }
+
+  const io = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        io.disconnect();
+        runDelayed();
+      }
+    },
+    { root: null, rootMargin, threshold: 0 }
+  );
+  io.observe(img);
+  window.setTimeout(() => io.disconnect(), 60_000);
+  return true;
+}
+
 /**
  * 处理图片 URL，根据用户设置使用相应的代理
  */
@@ -570,6 +651,12 @@ export function processImageUrl(originalUrl: string): string {
   // 如果已经是代理URL，直接返回
   if (originalUrl.startsWith('/api/image-proxy')) {
     return originalUrl;
+  }
+
+  // Absolute http → https to avoid mixed-content blocks on HTTPS pages (CMS posters etc.)
+  // Leave relative, data:, blob:, and already-https URLs alone. Do not wrap CMS in image-proxy.
+  if (originalUrl.startsWith('http://')) {
+    originalUrl = `https://${originalUrl.slice('http://'.length)}`;
   }
 
   // 处理 TMDB 图片 URL 替换
